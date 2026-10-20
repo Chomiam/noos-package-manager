@@ -271,7 +271,8 @@ pub fn build_main_window(app: &adw::Application) -> adw::ApplicationWindow {
 
     let window = adw::ApplicationWindow::builder()
         .application(app)
-        .title("Noos Package Manager")
+        .title("Gestionnaire de paquets")
+        .icon_name("noos-package-manager")
         .default_width(1180)
         .default_height(760)
         .width_request(760)
@@ -681,6 +682,7 @@ pub fn build_main_window(app: &adw::Application) -> adw::ApplicationWindow {
                     } => {
                         spinner_ui.set_spinning(false);
                         spinner_ui.set_visible(false);
+                        actions_ui.update_all_btn.set_sensitive(true);
 
                         install_mgr_ui.on_install_finished(success, &message);
 
@@ -690,8 +692,60 @@ pub fn build_main_window(app: &adw::Application) -> adw::ApplicationWindow {
                                 for id in &installed_ids {
                                     st.selected_packages.remove(id);
                                 }
+                                for pkg in &mut st.catalog_packages {
+                                    if installed_ids.contains(&pkg.id) {
+                                        pkg.is_installed = true;
+                                        if let Some(new_ver) = pkg.update_available.take() {
+                                            pkg.version = new_ver;
+                                        }
+                                    }
+                                }
+                                if let Some(ref mut results) = st.search_results {
+                                    for pkg in results.iter_mut() {
+                                        if installed_ids.contains(&pkg.id) {
+                                            pkg.is_installed = true;
+                                            if let Some(new_ver) = pkg.update_available.take() {
+                                                pkg.version = new_ver;
+                                            }
+                                        }
+                                    }
+                                }
+                                for (_, list) in &mut st.recommendations {
+                                    for pkg in list.iter_mut() {
+                                        if installed_ids.contains(&pkg.id) {
+                                            pkg.is_installed = true;
+                                            if let Some(new_ver) = pkg.update_available.take() {
+                                                pkg.version = new_ver;
+                                            }
+                                        }
+                                    }
+                                }
+                                for (_, list) in &mut st.flatpak_recommendations {
+                                    for pkg in list.iter_mut() {
+                                        if installed_ids.contains(&pkg.id) {
+                                            pkg.is_installed = true;
+                                            if let Some(new_ver) = pkg.update_available.take() {
+                                                pkg.version = new_ver;
+                                            }
+                                        }
+                                    }
+                                }
+                                st.updates_count = st
+                                    .catalog_packages
+                                    .iter()
+                                    .filter(|p| p.update_available.is_some())
+                                    .count();
                             }
                             update_selection_buttons(&state_ui, &actions_ui);
+                            rebuild_package_list_ui(
+                                &state_ui,
+                                &prefs_page,
+                                &stack,
+                                &empty_page,
+                                &badges_ui,
+                                &actions_ui,
+                                &tx_ui,
+                            );
 
                             let toast = adw::Toast::builder()
                                 .title(&message)
@@ -1023,7 +1077,11 @@ fn rebuild_package_list_ui(
             }
             match pkg.source {
                 PackageSource::Pacman => c_pacman += 1,
-                PackageSource::Aur => c_aur += 1,
+                PackageSource::Aur => {
+                    if !pkg.is_installed {
+                        c_aur += 1;
+                    }
+                }
                 PackageSource::Flatpak => c_flatpak += 1,
                 PackageSource::AppImage(_) => c_appimage += 1,
             }

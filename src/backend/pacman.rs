@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use std::process::Stdio;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
@@ -450,11 +451,12 @@ pub async fn search_packages(
     Ok(parse_pacman_ss_output(&stdout, updates_map))
 }
 
-/// Installe un paquet officiel via `pkexec pacman -S --noconfirm --needed`.
+/// Installe un paquet officiel via `pkexec pacman -Sy --noconfirm --needed`.
 pub async fn install_package(pkg_name: &str) -> AppResult<String> {
     let output = Command::new("pkexec")
         .env("LC_ALL", "C")
-        .args(["pacman", "-S", "--noconfirm", "--needed", pkg_name])
+        .stdin(Stdio::null())
+        .args(["pacman", "-Sy", "--noconfirm", "--needed", pkg_name])
         .output()
         .await?;
 
@@ -470,11 +472,12 @@ pub async fn install_package(pkg_name: &str) -> AppResult<String> {
     }
 }
 
-/// Met à jour un paquet officiel via `pkexec pacman -S --noconfirm`.
+/// Met à jour un paquet officiel via `pkexec pacman -Sy --noconfirm`.
 pub async fn update_package(pkg_name: &str) -> AppResult<String> {
     let output = Command::new("pkexec")
         .env("LC_ALL", "C")
-        .args(["pacman", "-S", "--noconfirm", pkg_name])
+        .stdin(Stdio::null())
+        .args(["pacman", "-Sy", "--noconfirm", pkg_name])
         .output()
         .await?;
 
@@ -494,6 +497,7 @@ pub async fn update_package(pkg_name: &str) -> AppResult<String> {
 pub async fn update_all_system_packages() -> AppResult<String> {
     let output = Command::new("pkexec")
         .env("LC_ALL", "C")
+        .stdin(Stdio::null())
         .args(["pacman", "-Syu", "--noconfirm"])
         .output()
         .await?;
@@ -516,6 +520,7 @@ pub async fn update_all_system_packages() -> AppResult<String> {
 pub async fn remove_package(pkg_name: &str) -> AppResult<String> {
     let output = Command::new("pkexec")
         .env("LC_ALL", "C")
+        .stdin(Stdio::null())
         .args(["pacman", "-Rns", "--noconfirm", pkg_name])
         .output()
         .await?;
@@ -570,6 +575,28 @@ pub fn parse_pacman_sp_output(
     deps
 }
 
+fn find_checkupdates_db_dir() -> Option<PathBuf> {
+    if let Ok(custom) = std::env::var("CHECKUPDATES_DB") {
+        let p = PathBuf::from(custom);
+        if p.join("sync").is_dir() {
+            return Some(p);
+        }
+    }
+    if let Ok(status_str) = std::fs::read_to_string("/proc/self/status") {
+        for line in status_str.lines() {
+            if let Some(rest) = line.strip_prefix("Uid:") {
+                if let Some(uid_tok) = rest.split_whitespace().next() {
+                    let cand = PathBuf::from(format!("/tmp/checkup-db-{uid_tok}"));
+                    if cand.join("sync").is_dir() {
+                        return Some(cand);
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
 /// Résout sans privilèges root la liste complète des dépendances et tailles de téléchargement
 /// d'un lot de paquets Pacman via `pacman -Sp --print-format "%n|%v|%s"`.
 pub async fn resolve_pacman_dependencies(targets: &[String]) -> AppResult<Vec<DependencyStepItem>> {
@@ -578,16 +605,44 @@ pub async fn resolve_pacman_dependencies(targets: &[String]) -> AppResult<Vec<De
     }
 
     let explicit_set: HashSet<String> = targets.iter().cloned().collect();
+    let mut resolved = Vec::new();
 
-    let output = Command::new("pacman")
-        .env("LC_ALL", "C")
-        .args(["-Sp", "--needed", "--print-format", "%n|%v|%s"])
-        .args(targets)
-        .output()
-        .await?;
+    // Si checkupdates a synchronisé une base temporaire récente (/tmp/checkup-db-<uid>), l'utiliser en priorité
+    // afin de détecter les tailles et versions des mises à jour avant le `pacman -Sy` root.
+    if let Some(checkup_db) = find_checkupdates_db_dir() {
+        if let Some(db_str) = checkup_db.to_str() {
+            if let Ok(output) = Command::new("pacman")
+                .env("LC_ALL", "C")
+                .args([
+                    "-Sp",
+                    "--needed",
+                    "--dbpath",
+                    db_str,
+                    "--print-format",
+                    "%n|%v|%s",
+                ])
+                .args(targets)
+                .output()
+                .await
+            {
+                if let Ok(stdout) = String::from_utf8(output.stdout) {
+                    resolved = parse_pacman_sp_output(&stdout, &explicit_set);
+                }
+            }
+        }
+    }
 
-    let stdout = String::from_utf8(output.stdout)?;
-    let mut resolved = parse_pacman_sp_output(&stdout, &explicit_set);
+    if resolved.is_empty() {
+        let output = Command::new("pacman")
+            .env("LC_ALL", "C")
+            .args(["-Sp", "--needed", "--print-format", "%n|%v|%s"])
+            .args(targets)
+            .output()
+            .await?;
+
+        let stdout = String::from_utf8(output.stdout)?;
+        resolved = parse_pacman_sp_output(&stdout, &explicit_set);
+    }
 
     if resolved.is_empty() {
         for t in targets {
@@ -615,6 +670,18 @@ pub fn parse_pacman_progress_line(
         return None;
     }
 
+    if trimmed.contains("Synchronizing package databases") {
+        return Some((
+            String::from("Synchronisation des bases de données de paquets (`pacman -Sy`)…"),
+            None,
+        ));
+    }
+    if trimmed.contains("Starting full system upgrade") {
+        return Some((
+            String::from("Calcul de la mise à jour complète du système…"),
+            None,
+        ));
+    }
     if trimmed.contains("resolving dependencies") {
         return Some((String::from("Résolution des dépendances…"), None));
     }
@@ -700,11 +767,12 @@ fn match_package_from_filename_token(token: &str, known_deps: &[String]) -> Stri
     }
 }
 
-/// Installe un lot de paquets Pacman via `pkexec pacman -S --noconfirm --needed` en diffusant
+/// Installe ou met à jour un lot de paquets Pacman via `pkexec pacman -Sy --noconfirm` en diffusant
 /// en temps réel la progression de téléchargement et d'installation des dépendances.
 pub async fn install_packages_streaming(
     targets: &[String],
     known_deps: &[String],
+    has_updates: bool,
     cancel_handle: &InstallCancelHandle,
     ui_tx: &async_channel::Sender<UiEvent>,
 ) -> AppResult<String> {
@@ -717,21 +785,29 @@ pub async fn install_packages_streaming(
         )));
     }
 
+    let base_args: &[&str] = if has_updates {
+        &["pacman", "-Sy", "--noconfirm"]
+    } else {
+        &["pacman", "-Sy", "--noconfirm", "--needed"]
+    };
+
+    let cmd_preview = format!("$ pkexec {} {}", base_args.join(" "), targets.join(" "));
+
     let _ = ui_tx
         .send(UiEvent::InstallProgress {
-            phase: String::from("Authentification administrateur (Polkit) et démarrage de Pacman…"),
+            phase: String::from(
+                "Élévation de privilèges administrateur (Polkit) et synchronisation Pacman…",
+            ),
             fraction: 0.04,
             active_package: None,
-            log_line: Some(format!(
-                "$ pkexec pacman -S --noconfirm --needed {}",
-                targets.join(" ")
-            )),
+            log_line: Some(cmd_preview),
         })
         .await;
 
     let mut child = Command::new("pkexec")
         .env("LC_ALL", "C")
-        .args(["pacman", "-S", "--noconfirm", "--needed"])
+        .stdin(Stdio::null())
+        .args(base_args)
         .args(targets)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -830,12 +906,18 @@ pub async fn install_packages_streaming(
 
     if status.success() {
         Ok(format!(
-            "{} paquet(s) Pacman et leurs dépendances installés avec succès.",
+            "{} paquet(s) Pacman et leurs dépendances installés/mis à jour avec succès.",
             targets.len()
         ))
     } else {
-        let detail = if stderr_buf.trim().is_empty() {
-            format!("Code de sortie {}", status.code().unwrap_or(1))
+        let exit_code = status.code().unwrap_or(1);
+        let detail = if exit_code == 126 || exit_code == 127 || stderr_buf.contains("dismissed") || stderr_buf.contains("Not authorized") {
+            format!(
+                "Élévation de privilèges (Polkit) refusée ou annulée (code {exit_code}) : {}",
+                stderr_buf.trim()
+            )
+        } else if stderr_buf.trim().is_empty() {
+            format!("Code de sortie {exit_code}")
         } else {
             stderr_buf.trim().to_string()
         };
@@ -858,7 +940,9 @@ pub async fn update_pacman_all_streaming(
 
     let _ = ui_tx
         .send(UiEvent::InstallProgress {
-            phase: String::from("Mise à jour des dépôts officiels (`pkexec pacman -Syu`)…"),
+            phase: String::from(
+                "Élévation de privilèges (Polkit) et mise à jour des dépôts officiels (`pkexec pacman -Syu`)…",
+            ),
             fraction: 0.05,
             active_package: None,
             log_line: Some(String::from("$ pkexec pacman -Syu --noconfirm")),
@@ -867,6 +951,7 @@ pub async fn update_pacman_all_streaming(
 
     let mut child = Command::new("pkexec")
         .env("LC_ALL", "C")
+        .stdin(Stdio::null())
         .args(["pacman", "-Syu", "--noconfirm"])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -962,8 +1047,18 @@ pub async fn update_pacman_all_streaming(
             "Mises à jour Pacman terminées avec succès.",
         ))
     } else {
-        let detail = if stderr_buf.trim().is_empty() {
-            format!("Code de sortie {}", status.code().unwrap_or(1))
+        let exit_code = status.code().unwrap_or(1);
+        let detail = if exit_code == 126
+            || exit_code == 127
+            || stderr_buf.contains("dismissed")
+            || stderr_buf.contains("Not authorized")
+        {
+            format!(
+                "Élévation de privilèges (Polkit) refusée ou annulée (code {exit_code}) : {}",
+                stderr_buf.trim()
+            )
+        } else if stderr_buf.trim().is_empty() {
+            format!("Code de sortie {exit_code}")
         } else {
             stderr_buf.trim().to_string()
         };

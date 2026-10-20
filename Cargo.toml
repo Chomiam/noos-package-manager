@@ -1,6 +1,6 @@
 [package]
 name = "noos-package-manager"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 authors = ["Chomiam <axel.valens@ik.me>"]
 description = "Gestionnaire de paquets graphique moderne en Rust (GTK4 / Libadwaita) pour Arch Linux supportant les dépôts officiels Pacman, l'AUR (RPC v5 + yay/paru), Flatpak (Flathub) et la gestion complète des AppImages"

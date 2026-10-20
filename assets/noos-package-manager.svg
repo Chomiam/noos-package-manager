@@ -1,18 +1,49 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
   <defs>
-    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#1c71d8"/>
-      <stop offset="100%" stop-color="#3584e4"/>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1a5fb4"/>
+      <stop offset="55%" stop-color="#3584e4"/>
+      <stop offset="100%" stop-color="#62a0ea"/>
     </linearGradient>
-    <linearGradient id="boxTop" x1="0%" y1="0%" x2="0%" y2="100%">
-      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.95"/>
-      <stop offset="100%" stop-color="#deddda" stop-opacity="0.90"/>
+    <linearGradient id="boxTop" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="100%" stop-color="#e8f0fe"/>
+    </linearGradient>
+    <linearGradient id="boxLeft" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#d2e3fc"/>
+      <stop offset="100%" stop-color="#aecbfa"/>
+    </linearGradient>
+    <linearGradient id="boxRight" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#aecbfa"/>
+      <stop offset="100%" stop-color="#8ab4f8"/>
+    </linearGradient>
+    <linearGradient id="badgeGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#33d17a"/>
+      <stop offset="100%" stop-color="#26a269"/>
     </linearGradient>
   </defs>
-  <rect x="10" y="10" width="108" height="108" rx="26" fill="url(#bg)"/>
-  <path d="M64 26 L98 44 L64 62 L30 44 Z" fill="url(#boxTop)"/>
-  <path d="M30 44 L64 62 L64 100 L30 82 Z" fill="#ffffff" fill-opacity="0.82"/>
-  <path d="M98 44 L64 62 L64 100 L98 82 Z" fill="#ffffff" fill-opacity="0.64"/>
-  <circle cx="92" cy="90" r="18" fill="#2ec27e"/>
-  <path d="M92 81 L92 96 M85 90 L92 97 L99 90" stroke="#ffffff" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  <!-- Ombre de fond -->
+  <rect x="10" y="13" width="108" height="108" rx="26" fill="#0d3260" fill-opacity="0.35"/>
+  <!-- Fond squircle principal -->
+  <rect x="10" y="10" width="108" height="108" rx="26" fill="url(#bgGrad)"/>
+  <rect x="11" y="11" width="106" height="106" rx="25" fill="none" stroke="#ffffff" stroke-opacity="0.22" stroke-width="2"/>
+
+  <!-- Cube de paquet isométrique -->
+  <!-- Face supérieure -->
+  <path d="M64 24 L102 43 L64 62 L26 43 Z" fill="url(#boxTop)"/>
+  <!-- Bande adhésive centrale sur le dessus -->
+  <path d="M45 33.5 L83 52.5 L77 55.5 L39 36.5 Z" fill="#3584e4" fill-opacity="0.38"/>
+  <!-- Face gauche -->
+  <path d="M26 43 L64 62 L64 103 L26 84 Z" fill="url(#boxLeft)"/>
+  <!-- Face droite -->
+  <path d="M102 43 L64 62 L64 103 L102 84 Z" fill="url(#boxRight)"/>
+  <!-- Languette de carton centrale -->
+  <path d="M61 52.5 L67 52.5 L67 69 L64 71 L61 69 Z" fill="#ffffff" fill-opacity="0.88"/>
+  <!-- Arêtes lumineuses -->
+  <path d="M26 43 L64 62 L102 43 M64 62 L64 103" stroke="#ffffff" stroke-width="1.8" stroke-opacity="0.65" fill="none" stroke-linejoin="round"/>
+
+  <!-- Pastille d'installation / mise à jour -->
+  <circle cx="93" cy="91" r="21" fill="#0d3260" fill-opacity="0.32"/>
+  <circle cx="92" cy="89" r="20" fill="url(#badgeGrad)" stroke="#ffffff" stroke-width="2.5"/>
+  <path d="M92 79 L92 96 M84 89 L92 97 L100 89" stroke="#ffffff" stroke-width="3.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
 </svg>

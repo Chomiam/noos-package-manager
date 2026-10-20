@@ -64,9 +64,9 @@ pub const APP_CSS: &str = r#"
 }
 
 .aur-obsolete-panel {
-    padding: 4px 10px;
-    border-radius: 8px;
-    font-size: 0.80em;
+    padding: 2px 7px;
+    border-radius: 6px;
+    font-size: 0.76em;
     font-weight: 700;
     background-color: alpha(@warning_bg_color, 0.25);
     color: @warning_color;
@@ -86,16 +86,18 @@ pub const APP_CSS: &str = r#"
 }
 
 .aur-col-header-label {
-    font-size: 0.74em;
+    font-size: 0.75em;
     font-weight: 800;
     letter-spacing: 0.04em;
     opacity: 0.72;
+    padding: 4px 0px;
 }
 
 .aur-col-cell {
-    padding: 4px 6px;
+    padding: 4px 0px;
     border-radius: 6px;
-    font-size: 0.84em;
+    font-size: 0.85em;
+    font-variant-numeric: tabular-nums;
     background-color: alpha(@window_fg_color, 0.045);
 }
 

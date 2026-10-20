@@ -20,6 +20,7 @@ use crate::ui::messages::UiEvent;
 pub const AUR_RPC_BASE_URL: &str = "https://aur.archlinux.org/rpc/v5";
 
 pub const POPULAR_AUR_SHOWCASE: &[&str] = &[
+    "noos-package-manager",
     "paru",
     "yay",
     "brave-bin",
@@ -435,6 +436,8 @@ pub async fn install_or_update_aur_package(pkg_name: &str) -> AppResult<String> 
     // Si un émulateur de terminal graphique est disponible, ou via --sudo pkexec --noconfirm
     let output = Command::new(bin)
         .env("LC_ALL", "C")
+        .env("PACMAN_AUTH", "pkexec")
+        .stdin(Stdio::null())
         .args([
             "-S",
             "--noconfirm",
@@ -548,6 +551,8 @@ pub async fn install_aur_packages_streaming(
 
     let mut child = Command::new(bin)
         .env("LC_ALL", "C")
+        .env("PACMAN_AUTH", "pkexec")
+        .stdin(Stdio::null())
         .args(["-S", "--noconfirm", "--sudo", "pkexec"])
         .args(targets)
         .stdout(Stdio::piped())
@@ -688,6 +693,8 @@ pub async fn update_aur_all_streaming(
 
     let mut child = Command::new(bin)
         .env("LC_ALL", "C")
+        .env("PACMAN_AUTH", "pkexec")
+        .stdin(Stdio::null())
         .args(["-Sua", "--noconfirm", "--sudo", "pkexec"])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

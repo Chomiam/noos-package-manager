@@ -483,7 +483,7 @@ impl SidebarCategory {
             Self::Installed => item.is_installed,
             Self::Updates => item.update_available.is_some(),
             Self::Pacman => matches!(item.source, PackageSource::Pacman),
-            Self::Aur => matches!(item.source, PackageSource::Aur),
+            Self::Aur => matches!(item.source, PackageSource::Aur) && !item.is_installed,
             Self::Flatpak => matches!(item.source, PackageSource::Flatpak),
             Self::AppImages => matches!(item.source, PackageSource::AppImage(_)),
         }

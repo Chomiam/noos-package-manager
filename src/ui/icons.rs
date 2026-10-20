@@ -17,7 +17,55 @@ struct IconResolverIndex {
 
 static ICON_INDEX: OnceLock<IconResolverIndex> = OnceLock::new();
 
+const APP_LOGO_SVG: &str = include_str!("../../assets/noos-package-manager.svg");
+
+fn ensure_app_logo_and_desktop_installed() -> Option<PathBuf> {
+    let home = PathBuf::from(env::var_os("HOME")?);
+    let icon_dir = home
+        .join(".local")
+        .join("share")
+        .join("icons")
+        .join("hicolor")
+        .join("scalable")
+        .join("apps");
+    let _ = fs::create_dir_all(&icon_dir);
+    let icon_path = icon_dir.join("noos-package-manager.svg");
+    let _ = fs::write(&icon_path, APP_LOGO_SVG);
+
+    let apps_dir = home.join(".local").join("share").join("applications");
+    let _ = fs::create_dir_all(&apps_dir);
+    let desktop_path = apps_dir.join("noos-package-manager.desktop");
+    if !Path::new("/usr/share/applications/noos-package-manager.desktop").exists() {
+        let exec_cmd = env::current_exe()
+            .ok()
+            .and_then(|p| p.to_str().map(|s| format!("\"{s}\"")))
+            .unwrap_or_else(|| String::from("noos-package-manager"));
+        let desktop_content = format!(
+            "[Desktop Entry]\n\
+             Type=Application\n\
+             Version=1.0\n\
+             Name=Gestionnaire de paquets\n\
+             Name[fr]=Gestionnaire de paquets\n\
+             GenericName=Gestionnaire de paquets Arch Linux\n\
+             Comment=Gestionnaire de paquets graphique moderne (Pacman, AUR, Flatpak/Flathub et AppImages) pour Arch Linux\n\
+             Exec={exec_cmd}\n\
+             Icon={}\n\
+             Terminal=false\n\
+             Categories=System;PackageManager;GTK;GNOME;\n\
+             Keywords=pacman;aur;yay;paru;flatpak;flathub;appimage;arch;package;manager;noos;gestionnaire;paquets;\n\
+             StartupNotify=true\n\
+             StartupWMClass=org.noos.PackageManager\n",
+            icon_path.display()
+        );
+        let _ = fs::write(desktop_path, desktop_content);
+    }
+
+    Some(icon_path)
+}
+
 pub fn init_icon_search_paths() {
+    let _ = ensure_app_logo_and_desktop_installed();
+
     let Some(display) = gdk::Display::default() else {
         return;
     };
@@ -28,6 +76,8 @@ pub fn init_icon_search_paths() {
             icon_theme.add_search_path(&dir);
         }
     }
+
+    gtk4::Window::set_default_icon_name("noos-package-manager");
 
     let _ = get_icon_index();
 }
@@ -92,6 +142,11 @@ fn get_icon_index() -> &'static IconResolverIndex {
     ICON_INDEX.get_or_init(|| {
         let mut file_index = HashMap::with_capacity(7000);
         let mut desktop_icon_map = HashMap::with_capacity(500);
+
+        if let Some(logo_path) = ensure_app_logo_and_desktop_installed() {
+            file_index.insert(String::from("noos-package-manager"), logo_path.clone());
+            file_index.insert(String::from("org.noos.packagemanager"), logo_path);
+        }
 
         for dir in candidate_icon_directories() {
             let Ok(entries) = fs::read_dir(&dir) else {
@@ -196,6 +251,7 @@ fn get_icon_index() -> &'static IconResolverIndex {
 
 fn alias_candidates(base_name: &str) -> &'static [&'static str] {
     match base_name {
+        "noos-package-manager" => &["noos-package-manager", "org.noos.packagemanager"],
         "code" | "code-oss" | "vscodium" => &["visual-studio-code", "vscode", "com.visualstudio.code"],
         "obs-studio" => &["com.obsproject.studio", "obs", "obs-studio"],
         "zed" => &["zed", "dev.zed.zed", "accessories-text-editor"],

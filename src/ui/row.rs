@@ -9,23 +9,51 @@ use crate::backend::models::{PackageItem, PackageSource};
 use crate::ui::icons::build_package_icon_widget;
 use crate::ui::messages::BackendCommand;
 
-const COL_VOTES_WIDTH: i32 = 72;
-const COL_POPULARITY_WIDTH: i32 = 68;
-const COL_MAINTAINER_WIDTH: i32 = 110;
-const COL_UPDATED_WIDTH: i32 = 96;
-const COL_VERSION_WIDTH: i32 = 146;
-const COL_ACTIONS_WIDTH: i32 = 90;
+const COL_VOTES_WIDTH: i32 = 64;
+const COL_POPULARITY_WIDTH: i32 = 54;
+const COL_MAINTAINER_WIDTH: i32 = 96;
+const COL_UPDATED_WIDTH: i32 = 88;
+const COL_VERSION_WIDTH: i32 = 118;
+const COL_ACTIONS_WIDTH: i32 = 74;
+const AUR_COL_SPACING: i32 = 6;
+const PREFIX_CHECK_WIDTH: i32 = 24;
+const PREFIX_ICON_WIDTH: i32 = 36;
 
-/// Construit la ligne d'en-tête des colonnes pour l'onglet AUR afin d'aligner visuellement
-/// `Paquet & Description | Votes | Popularité | Mainteneur | Dernière màj | Version | Actions`.
+fn wrap_in_fixed_column(child: &impl IsA<gtk4::Widget>, width: i32) -> gtk4::Box {
+    let col_box = gtk4::Box::builder()
+        .orientation(gtk4::Orientation::Horizontal)
+        .width_request(width)
+        .hexpand(false)
+        .valign(gtk4::Align::Center)
+        .build();
+    col_box.append(child);
+    col_box
+}
+
+/// Construit la ligne d'en-tête des colonnes pour l'onglet AUR afin d'aligner au pixel près :
+/// `Paquet | Votes | Popularité | Mainteneur | Mise à jour | Version | Actions`.
 pub fn build_aur_columns_header_row() -> adw::ActionRow {
     let header_row = adw::ActionRow::builder()
-        .title("PAQUET &amp; DESCRIPTION")
+        .title("PAQUET")
+        .title_lines(1)
         .css_classes(["aur-table-header-row"])
         .activatable(false)
         .build();
 
-    let suffix_box = gtk4::Box::new(gtk4::Orientation::Horizontal, 6);
+    // Même préfixe exact (case à cocher 24px + espacement 10px + icône 36px) pour aligner "PAQUET"
+    let header_prefix = gtk4::Box::new(gtk4::Orientation::Horizontal, 10);
+    header_prefix.set_valign(gtk4::Align::Center);
+    let check_spacer = gtk4::Box::builder()
+        .width_request(PREFIX_CHECK_WIDTH)
+        .build();
+    let icon_spacer = gtk4::Box::builder()
+        .width_request(PREFIX_ICON_WIDTH)
+        .build();
+    header_prefix.append(&check_spacer);
+    header_prefix.append(&icon_spacer);
+    header_row.add_prefix(&header_prefix);
+
+    let suffix_box = gtk4::Box::new(gtk4::Orientation::Horizontal, AUR_COL_SPACING);
     suffix_box.set_valign(gtk4::Align::Center);
 
     let cols: [(&str, i32, f32); 6] = [
@@ -40,11 +68,14 @@ pub fn build_aur_columns_header_row() -> adw::ActionRow {
     for (title, width, xalign) in cols {
         let lbl = gtk4::Label::builder()
             .label(title)
-            .width_request(width)
+            .hexpand(true)
             .xalign(xalign)
+            .width_chars(1)
+            .max_width_chars(1)
+            .ellipsize(gtk4::pango::EllipsizeMode::End)
             .css_classes(["aur-col-header-label"])
             .build();
-        suffix_box.append(&lbl);
+        suffix_box.append(&wrap_in_fixed_column(&lbl, width));
     }
 
     header_row.add_suffix(&suffix_box);
@@ -63,19 +94,29 @@ where
     F: Fn(bool) + 'static,
     I: Fn() + 'static,
 {
-    let base_desc = item.truncated_description(100);
-
+    let is_aur_row = item.aur_meta.is_some();
     let escaped_title = gtk4::glib::markup_escape_text(&item.name);
-    let escaped_subtitle = gtk4::glib::markup_escape_text(&base_desc);
 
-    let row = adw::ActionRow::builder()
-        .title(escaped_title.as_str())
-        .subtitle(escaped_subtitle.as_str())
-        .title_lines(1)
-        .subtitle_lines(2)
-        .build();
+    let row = if is_aur_row {
+        // Dans l'onglet AUR, on n'affiche pas la description sous le nom pour garder des lignes compactes et alignées
+        let r = adw::ActionRow::builder()
+            .title(escaped_title.as_str())
+            .title_lines(1)
+            .build();
+        r.set_tooltip_text(Some(&item.description));
+        r
+    } else {
+        let base_desc = item.truncated_description(100);
+        let escaped_subtitle = gtk4::glib::markup_escape_text(&base_desc);
+        adw::ActionRow::builder()
+            .title(escaped_title.as_str())
+            .subtitle(escaped_subtitle.as_str())
+            .title_lines(1)
+            .subtitle_lines(2)
+            .build()
+    };
 
-    // Préfixe : case à cocher + logo réel + badge source (uniquement dans Installés)
+    // Préfixe : emplacement fixe 24px pour la case à cocher + logo 36px + badge source (uniquement dans Installés)
     let prefix_box = gtk4::Box::new(gtk4::Orientation::Horizontal, 10);
     prefix_box.set_valign(gtk4::Align::Center);
 
@@ -84,9 +125,17 @@ where
         PackageSource::Pacman | PackageSource::Aur | PackageSource::Flatpak
     ) && (!item.is_installed || item.update_available.is_some());
 
+    let check_slot = gtk4::Box::builder()
+        .orientation(gtk4::Orientation::Horizontal)
+        .width_request(PREFIX_CHECK_WIDTH)
+        .halign(gtk4::Align::Center)
+        .valign(gtk4::Align::Center)
+        .build();
+
     if can_select_for_install {
         let check_btn = gtk4::CheckButton::builder()
             .active(is_checked)
+            .halign(gtk4::Align::Center)
             .valign(gtk4::Align::Center)
             .tooltip_text("Sélectionner ce paquet pour une installation groupée")
             .build();
@@ -96,12 +145,20 @@ where
         });
 
         row.set_activatable_widget(Some(&check_btn));
-        prefix_box.append(&check_btn);
+        check_slot.append(&check_btn);
     }
+    prefix_box.append(&check_slot);
 
+    let icon_slot = gtk4::Box::builder()
+        .orientation(gtk4::Orientation::Horizontal)
+        .width_request(PREFIX_ICON_WIDTH)
+        .halign(gtk4::Align::Center)
+        .valign(gtk4::Align::Center)
+        .build();
     let icon = build_package_icon_widget(item);
     icon.set_valign(gtk4::Align::Center);
-    prefix_box.append(&icon);
+    icon_slot.append(&icon);
+    prefix_box.append(&icon_slot);
 
     if show_source_badge {
         let source_badge = gtk4::Label::new(Some(item.source.label()));
@@ -113,42 +170,71 @@ where
 
     row.add_prefix(&prefix_box);
 
-    // Suffixe : colonnes structurées pour AUR, ou affichage standard pour Pacman / Flatpak / AppImage
-    let suffix_box = gtk4::Box::new(gtk4::Orientation::Horizontal, 6);
+    // Suffixe : colonnes strictement alignées pour AUR, ou affichage standard pour Pacman / Flatpak / AppImage
+    let suffix_box = gtk4::Box::new(gtk4::Orientation::Horizontal, AUR_COL_SPACING);
     suffix_box.set_valign(gtk4::Align::Center);
 
     if let Some(ref meta) = item.aur_meta {
+        // Si le paquet est marqué comme obsolète (Out-of-Date), afficher le panneau warning à gauche des 6 colonnes fixes
+        if let Some(out_ts) = meta.out_of_date {
+            let out_full = format_unix_timestamp(out_ts);
+            let warn_panel = gtk4::Box::new(gtk4::Orientation::Horizontal, 4);
+            warn_panel.add_css_class("aur-obsolete-panel");
+            warn_panel.set_valign(gtk4::Align::Center);
+            warn_panel.set_tooltip_text(Some(&format!(
+                "Attention : ce paquet AUR est marqué comme obsolète (Out-of-Date) par le mainteneur depuis le {out_full}"
+            )));
+
+            let warn_icon = gtk4::Image::from_icon_name("dialog-warning-symbolic");
+            warn_icon.set_pixel_size(12);
+            warn_panel.append(&warn_icon);
+
+            let warn_lbl = gtk4::Label::builder()
+                .label("Obsolète")
+                .build();
+            warn_panel.append(&warn_lbl);
+
+            suffix_box.append(&warn_panel);
+        }
+
         // Colonne 1 : Votes
         let votes_lbl = gtk4::Label::builder()
             .label(format!("★ {}", meta.votes))
-            .width_request(COL_VOTES_WIDTH)
+            .hexpand(true)
             .xalign(0.5)
             .valign(gtk4::Align::Center)
+            .width_chars(1)
+            .max_width_chars(1)
+            .ellipsize(gtk4::pango::EllipsizeMode::End)
             .tooltip_text(format!("Votes AUR : {}", meta.votes))
             .css_classes(["aur-col-cell", "aur-col-votes"])
             .build();
-        suffix_box.append(&votes_lbl);
+        suffix_box.append(&wrap_in_fixed_column(&votes_lbl, COL_VOTES_WIDTH));
 
         // Colonne 2 : Popularité
         let pop_lbl = gtk4::Label::builder()
             .label(format!("{:.2}", meta.popularity))
-            .width_request(COL_POPULARITY_WIDTH)
+            .hexpand(true)
             .xalign(0.5)
             .valign(gtk4::Align::Center)
+            .width_chars(1)
+            .max_width_chars(1)
+            .ellipsize(gtk4::pango::EllipsizeMode::End)
             .tooltip_text(format!("Indice de popularité AUR : {:.2}", meta.popularity))
             .css_classes(["aur-col-cell"])
             .build();
-        suffix_box.append(&pop_lbl);
+        suffix_box.append(&wrap_in_fixed_column(&pop_lbl, COL_POPULARITY_WIDTH));
 
         // Colonne 3 : Mainteneur
         let is_orphan = meta.maintainer.is_none();
         let maint_str = meta.maintainer.as_deref().unwrap_or("Orphelin");
         let maint_lbl = gtk4::Label::builder()
             .label(maint_str)
-            .width_request(COL_MAINTAINER_WIDTH)
-            .max_width_chars(12)
+            .hexpand(true)
             .xalign(0.5)
             .valign(gtk4::Align::Center)
+            .width_chars(1)
+            .max_width_chars(1)
             .ellipsize(gtk4::pango::EllipsizeMode::End)
             .tooltip_text(format!("Mainteneur AUR : {maint_str}"))
             .css_classes(["aur-col-cell"])
@@ -156,7 +242,7 @@ where
         if is_orphan {
             maint_lbl.add_css_class("aur-col-orphan");
         }
-        suffix_box.append(&maint_lbl);
+        suffix_box.append(&wrap_in_fixed_column(&maint_lbl, COL_MAINTAINER_WIDTH));
 
         // Colonne 4 : Dernière mise à jour
         let (short_date, full_date) = match meta.last_modified {
@@ -173,77 +259,45 @@ where
         };
         let date_lbl = gtk4::Label::builder()
             .label(&short_date)
-            .width_request(COL_UPDATED_WIDTH)
-            .max_width_chars(10)
+            .hexpand(true)
             .xalign(0.5)
             .valign(gtk4::Align::Center)
+            .width_chars(1)
+            .max_width_chars(1)
+            .ellipsize(gtk4::pango::EllipsizeMode::End)
             .tooltip_text(format!("Dernière mise à jour AUR : {full_date}"))
             .css_classes(["aur-col-cell"])
             .build();
-        suffix_box.append(&date_lbl);
+        suffix_box.append(&wrap_in_fixed_column(&date_lbl, COL_UPDATED_WIDTH));
 
-        // Colonne 5 : Version (+ Panneau Obsolète empilé verticalement s'il est out-of-date)
-        let ver_col_box = gtk4::Box::builder()
-            .orientation(gtk4::Orientation::Vertical)
-            .spacing(3)
-            .width_request(COL_VERSION_WIDTH)
-            .valign(gtk4::Align::Center)
-            .build();
-
-        if let Some(ref new_ver) = item.update_available {
+        // Colonne 5 : Version
+        let ver_label = if let Some(ref new_ver) = item.update_available {
             let ver_text = format!("{} → {}", item.version, new_ver);
-            let ver_label = gtk4::Label::builder()
+            gtk4::Label::builder()
                 .label(&ver_text)
-                .width_request(COL_VERSION_WIDTH)
-                .max_width_chars(15)
+                .hexpand(true)
                 .xalign(0.5)
+                .valign(gtk4::Align::Center)
+                .width_chars(1)
+                .max_width_chars(1)
                 .ellipsize(gtk4::pango::EllipsizeMode::End)
                 .tooltip_text(format!("Mise à jour disponible : {ver_text}"))
                 .css_classes(["version-update-pill"])
-                .build();
-            ver_col_box.append(&ver_label);
+                .build()
         } else {
-            let ver_label = gtk4::Label::builder()
+            gtk4::Label::builder()
                 .label(&item.version)
-                .width_request(COL_VERSION_WIDTH)
-                .max_width_chars(15)
+                .hexpand(true)
                 .xalign(0.5)
+                .valign(gtk4::Align::Center)
+                .width_chars(1)
+                .max_width_chars(1)
                 .ellipsize(gtk4::pango::EllipsizeMode::End)
                 .tooltip_text(format!("Version : {}", item.version))
                 .css_classes(["version-pill"])
-                .build();
-            ver_col_box.append(&ver_label);
-        }
-
-        if let Some(out_ts) = meta.out_of_date {
-            let out_full = format_unix_timestamp(out_ts);
-            let out_short = out_full
-                .split_whitespace()
-                .next()
-                .unwrap_or(&out_full)
-                .to_string();
-            let warn_panel = gtk4::Box::new(gtk4::Orientation::Horizontal, 4);
-            warn_panel.add_css_class("aur-obsolete-panel");
-            warn_panel.set_halign(gtk4::Align::Center);
-            warn_panel.set_tooltip_text(Some(&format!(
-                "Attention : ce paquet AUR est marqué comme obsolète (Out-of-Date) par le mainteneur depuis le {out_full}"
-            )));
-
-            let warn_icon = gtk4::Image::from_icon_name("dialog-warning-symbolic");
-            warn_icon.set_pixel_size(12);
-            warn_panel.append(&warn_icon);
-
-            let warn_lbl = gtk4::Label::builder()
-                .label(format!("Obsolète · {out_short}"))
-                .max_width_chars(15)
-                .ellipsize(gtk4::pango::EllipsizeMode::End)
-                .build();
-            warn_panel.append(&warn_lbl);
-
-            ver_col_box.append(&warn_panel);
-        }
-
-        suffix_box.append(&ver_col_box);
+                .build()
+        };
+        suffix_box.append(&wrap_in_fixed_column(&ver_label, COL_VERSION_WIDTH));
     } else {
         if let Some(ref new_ver) = item.update_available {
             let ver_text = format!("{} → {}", item.version, new_ver);
@@ -264,12 +318,14 @@ where
     let actions_box = gtk4::Box::builder()
         .orientation(gtk4::Orientation::Horizontal)
         .spacing(6)
-        .halign(gtk4::Align::End)
+        .halign(if is_aur_row {
+            gtk4::Align::Center
+        } else {
+            gtk4::Align::End
+        })
+        .hexpand(is_aur_row)
         .valign(gtk4::Align::Center)
         .build();
-    if item.aur_meta.is_some() {
-        actions_box.set_width_request(COL_ACTIONS_WIDTH);
-    }
 
     let info_btn = gtk4::Button::builder()
         .icon_name("dialog-information-symbolic")
@@ -431,7 +487,11 @@ where
         }
     }
 
-    suffix_box.append(&actions_box);
+    if is_aur_row {
+        suffix_box.append(&wrap_in_fixed_column(&actions_box, COL_ACTIONS_WIDTH));
+    } else {
+        suffix_box.append(&actions_box);
+    }
     row.add_suffix(&suffix_box);
     row
 }

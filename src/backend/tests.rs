@@ -419,6 +419,16 @@ foliate|3.3.0-3|3209478
         ))
     );
 
+    let sync_parsed =
+        parse_pacman_progress_line(":: Synchronizing package databases...", &known_names);
+    assert_eq!(
+        sync_parsed,
+        Some((
+            String::from("Synchronisation des bases de données de paquets (`pacman -Sy`)…"),
+            None
+        ))
+    );
+
     assert_eq!(
         extract_github_from_url("https://github.com/Morganamilo/paru/"),
         Some((String::from("Morganamilo"), String::from("paru")))

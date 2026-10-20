@@ -58,14 +58,21 @@ pub async fn load_system_catalog() -> AppResult<CatalogSnapshot> {
         }
     }
 
+    let all_installed_versions = pacman::list_all_installed_versions()
+        .await
+        .unwrap_or_default();
+
+    // Ne conserver que les mises à jour dont la version cible diffère réellement de la version installée
+    updates_full.retain(|pkg_name, (_, new_v)| {
+        all_installed_versions
+            .get(pkg_name)
+            .is_none_or(|inst_v| inst_v != new_v)
+    });
+
     let updates_simple: HashMap<String, String> = updates_full
         .iter()
         .map(|(k, (_, new_v))| (k.clone(), new_v.clone()))
         .collect();
-
-    let all_installed_versions = pacman::list_all_installed_versions()
-        .await
-        .unwrap_or_default();
 
     let recommendations =
         match pacman::load_recommended_by_category(&all_installed_versions, &updates_simple).await {
@@ -433,10 +440,15 @@ pub async fn install_batch_with_progress(
 
     let mut summary_messages = Vec::new();
 
+    let pacman_has_updates = items.iter().any(|i| {
+        matches!(i.source, PackageSource::Pacman) && (i.update_available.is_some() || i.is_installed)
+    });
+
     if !pacman_targets.is_empty() {
         match pacman::install_packages_streaming(
             &pacman_targets,
             &known_dep_names,
+            pacman_has_updates,
             cancel_handle,
             ui_tx,
         )
@@ -502,8 +514,90 @@ pub async fn install_batch_with_progress(
         }
     }
 
+    // Vérification post-installation / post-mise à jour via `pacman -Q`
+    if !pacman_targets.is_empty() || !aur_targets.is_empty() {
+        let post_versions = pacman::list_all_installed_versions()
+            .await
+            .unwrap_or_default();
+
+        for item in items {
+            if matches!(item.source, PackageSource::Pacman | PackageSource::Aur) {
+                match post_versions.get(&item.name) {
+                    Some(inst_ver) => {
+                        if let Some(ref expected_ver) = item.update_available {
+                            if !item.version.is_empty()
+                                && inst_ver == &item.version
+                                && inst_ver != expected_ver
+                            {
+                                let _ = ui_tx
+                                    .send(UiEvent::InstallFinished {
+                                        success: false,
+                                        message: format!(
+                                            "La mise à jour de « {} » n'a pas été appliquée (version installée toujours {}). Vérifiez l'élévation de privilèges Polkit.",
+                                            item.name, inst_ver
+                                        ),
+                                        installed_ids: Vec::new(),
+                                    })
+                                    .await;
+                                return;
+                            }
+                            let _ = ui_tx
+                                .send(UiEvent::InstallProgress {
+                                    phase: format!(
+                                        "Vérification : « {} » mis à jour en version {}",
+                                        item.name, inst_ver
+                                    ),
+                                    fraction: 0.98,
+                                    active_package: Some((
+                                        item.name.clone(),
+                                        DependencyStatus::Completed,
+                                    )),
+                                    log_line: Some(format!(
+                                        "[Vérifié] « {} » est maintenant installé en version {} (précédemment {}).",
+                                        item.name, inst_ver, item.version
+                                    )),
+                                })
+                                .await;
+                        } else {
+                            let _ = ui_tx
+                                .send(UiEvent::InstallProgress {
+                                    phase: format!(
+                                        "Vérification : « {} » installé en version {}",
+                                        item.name, inst_ver
+                                    ),
+                                    fraction: 0.98,
+                                    active_package: Some((
+                                        item.name.clone(),
+                                        DependencyStatus::Completed,
+                                    )),
+                                    log_line: Some(format!(
+                                        "[Vérifié] « {} » est installé en version {}.",
+                                        item.name, inst_ver
+                                    )),
+                                })
+                                .await;
+                        }
+                    }
+                    None => {
+                        let _ = ui_tx
+                            .send(UiEvent::InstallFinished {
+                                success: false,
+                                message: format!(
+                                    "Vérification échouée : le paquet « {} » n'apparaît pas comme installé après la transaction.",
+                                    item.name
+                                ),
+                                installed_ids: Vec::new(),
+                            })
+                            .await;
+                        return;
+                    }
+                }
+            }
+        }
+    }
+
     let final_msg = if summary_messages.is_empty() {
-        String::from("Installation terminée avec succès.")
+        String::from("Installation terminée et vérifiée avec succès.")
     } else {
         summary_messages.join(" · ")
     };
@@ -525,6 +619,25 @@ pub async fn update_all_system_and_aur_with_progress(
 ) {
     cancel_handle.reset();
 
+    let _ = ui_tx
+        .send(UiEvent::InstallStarted {
+            target_names: vec![String::from("Mise à jour système (Pacman, AUR & Flatpak)")],
+        })
+        .await;
+
+    let _ = ui_tx
+        .send(UiEvent::InstallProgress {
+            phase: String::from(
+                "Analyse des mises à jour disponibles (Pacman, AUR, Flatpak)…",
+            ),
+            fraction: 0.02,
+            active_package: None,
+            log_line: Some(String::from(
+                "Vérification des dépôts officiels, AUR et Flathub avant la transaction…",
+            )),
+        })
+        .await;
+
     let (pacman_upd_res, aur_upd_res, flatpak_upd_res) = tokio::join!(
         pacman::check_updates_map(),
         aur::check_aur_updates_via_helper(),
@@ -535,26 +648,10 @@ pub async fn update_all_system_and_aur_with_progress(
     let aur_updates = aur_upd_res.unwrap_or_default();
     let flatpak_updates = flatpak_upd_res.unwrap_or_default();
 
-    let mut all_target_names: Vec<String> = pacman_updates.keys().cloned().collect();
-    for k in aur_updates.keys() {
-        if !all_target_names.contains(k) {
-            all_target_names.push(k.clone());
-        }
-    }
-    for k in flatpak_updates.keys() {
-        if !all_target_names.contains(k) {
-            all_target_names.push(k.clone());
-        }
-    }
-
-    let _ = ui_tx
-        .send(UiEvent::InstallStarted {
-            target_names: all_target_names.clone(),
-        })
-        .await;
-
+    let mut updated_ids = Vec::new();
     let mut dep_steps = Vec::new();
     for (name, (_, new_ver)) in &pacman_updates {
+        updated_ids.push(format!("pacman:{name}"));
         dep_steps.push(DependencyStepItem {
             name: name.clone(),
             version: new_ver.clone(),
@@ -565,6 +662,7 @@ pub async fn update_all_system_and_aur_with_progress(
         });
     }
     for (name, (_, new_ver)) in &aur_updates {
+        updated_ids.push(format!("aur:{name}"));
         dep_steps.push(DependencyStepItem {
             name: name.clone(),
             version: new_ver.clone(),
@@ -575,6 +673,7 @@ pub async fn update_all_system_and_aur_with_progress(
         });
     }
     for (app_id, new_ver) in &flatpak_updates {
+        updated_ids.push(format!("flatpak:{app_id}"));
         dep_steps.push(DependencyStepItem {
             name: app_id.clone(),
             version: new_ver.clone(),
@@ -612,7 +711,7 @@ pub async fn update_all_system_and_aur_with_progress(
         }
     }
 
-    if !aur_updates.is_empty() || aur::detect_aur_helper().is_some() {
+    if !aur_updates.is_empty() {
         match aur::update_aur_all_streaming(&known_names, cancel_handle, ui_tx).await {
             Ok(msg) => summaries.push(msg),
             Err(err) => {
@@ -644,6 +743,40 @@ pub async fn update_all_system_and_aur_with_progress(
         }
     }
 
+    // Vérification post-mise à jour des versions installées via `pacman -Q`
+    if !pacman_updates.is_empty() || !aur_updates.is_empty() {
+        let post_versions = pacman::list_all_installed_versions()
+            .await
+            .unwrap_or_default();
+
+        for (pkg_name, (old_ver, new_ver)) in pacman_updates.iter().chain(aur_updates.iter()) {
+            if let Some(inst_ver) = post_versions.get(pkg_name) {
+                if !old_ver.is_empty() && inst_ver == old_ver && inst_ver != new_ver {
+                    let _ = ui_tx
+                        .send(UiEvent::InstallFinished {
+                            success: false,
+                            message: format!(
+                                "La mise à jour de « {pkg_name} » n'a pas été appliquée (toujours en version {inst_ver}). Vérifiez l'authentification Polkit."
+                            ),
+                            installed_ids: Vec::new(),
+                        })
+                        .await;
+                    return;
+                }
+                let _ = ui_tx
+                    .send(UiEvent::InstallProgress {
+                        phase: format!("Vérification : « {pkg_name} » mis à jour en {inst_ver}"),
+                        fraction: 0.98,
+                        active_package: Some((pkg_name.clone(), DependencyStatus::Completed)),
+                        log_line: Some(format!(
+                            "[Vérifié] « {pkg_name} » mis à jour ({old_ver} → {inst_ver})."
+                        )),
+                    })
+                    .await;
+            }
+        }
+    }
+
     let final_msg = if summaries.is_empty() {
         String::from("Système Pacman, AUR et Flatpak entièrement mis à jour.")
     } else {
@@ -654,7 +787,7 @@ pub async fn update_all_system_and_aur_with_progress(
         .send(UiEvent::InstallFinished {
             success: true,
             message: final_msg,
-            installed_ids: Vec::new(),
+            installed_ids: updated_ids,
         })
         .await;
 }
