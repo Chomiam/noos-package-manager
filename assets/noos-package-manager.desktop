@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Noos Package Manager
+GenericName=Gestionnaire de paquets Arch Linux
+Comment=Gestionnaire de paquets graphique moderne (Pacman, AUR, Flatpak/Flathub et AppImages) pour Arch Linux
+Exec=noos-package-manager
+Icon=noos-package-manager
+Terminal=false
+Categories=System;PackageManager;GTK;GNOME;
+Keywords=pacman;aur;yay;paru;flatpak;flathub;appimage;arch;package;manager;
+StartupNotify=true
+StartupWMClass=org.noos.PackageManager
