@@ -34,13 +34,73 @@ pub const POPULAR_AUR_SHOWCASE: &[&str] = &[
     "bottles",
     "onlyoffice-bin",
     "vscodium-bin",
-    "librewolf-bin",
     "floorp-bin",
     "slack-desktop",
     "zoom",
     "anydesk-bin",
     "timeshift-autosnap",
     "ventoy-bin",
+    "sublime-text-4",
+    "jetbrains-toolbox",
+    "postman-bin",
+    "insomnia-bin",
+    "dbeaver-ce-bin",
+    "github-desktop-bin",
+    "gitkraken",
+    "cursor-bin",
+    "zed-preview-bin",
+    "waterfox-bin",
+    "tor-browser-bin",
+    "mullvad-browser-bin",
+    "ferdium-bin",
+    "teams-for-linux",
+    "viber",
+    "jellyfin-media-player",
+    "stremio",
+    "nuclear-player-bin",
+    "freetube-bin",
+    "yt-dlg",
+    "upscayl-bin",
+    "xnviewmp",
+    "aseprite",
+    "blockbench-bin",
+    "itch-setup-bin",
+    "lunar-client",
+    "r2modman-bin",
+    "game-devices-udev",
+    "mangohud-git",
+    "auto-cpufreq",
+    "coolercontrol-bin",
+    "bauh",
+    "octopi",
+    "pamac-aur",
+    "pacseek",
+    "downgrade",
+    "pikaur",
+    "trizen",
+    "aurutils",
+    "debtap",
+    "appimagelauncher",
+    "localsend-bin",
+    "rustdesk-bin",
+    "nomachine",
+    "teamviewer",
+    "1password",
+    "bitwarden-bin",
+    "keepassxc-git",
+    "veracrypt-git",
+    "obsidian-bin",
+    "notion-app-enhanced",
+    "logseq-desktop-bin",
+    "joplin-appimage",
+    "standardnotes-bin",
+    "ticktick",
+    "todoist-appimage",
+    "wps-office",
+    "freeoffice",
+    "masterpdfeditor-free",
+    "xmind",
+    "drawio-desktop-bin",
 ];
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -433,21 +493,26 @@ pub async fn install_or_update_aur_package(pkg_name: &str) -> AppResult<String> 
     let helper = detect_aur_helper().ok_or(AppError::AurHelperNotFound)?;
     let bin = helper.binary_name();
 
-    // Si un émulateur de terminal graphique est disponible, ou via --sudo pkexec --noconfirm
-    let output = Command::new(bin)
-        .env("LC_ALL", "C")
+    let mut cmd = Command::new(bin);
+    cmd.env("LC_ALL", "C")
         .env("PACMAN_AUTH", "pkexec")
         .stdin(Stdio::null())
-        .args([
-            "-S",
-            "--noconfirm",
-            "--needed",
-            "--sudo",
-            "pkexec",
-            pkg_name,
-        ])
-        .output()
-        .await?;
+        .args(["-S", "--aur", "--noconfirm", "--needed", "--sudo", "pkexec"]);
+    if matches!(helper, AurHelper::Yay) {
+        cmd.args([
+            "--answerclean",
+            "None",
+            "--answerdiff",
+            "None",
+            "--answeredit",
+            "None",
+            "--removemake",
+            "no",
+        ]);
+    }
+    cmd.arg(pkg_name);
+
+    let output = cmd.output().await?;
 
     if output.status.success() {
         Ok(format!(
@@ -531,6 +596,8 @@ pub async fn install_aur_packages_streaming(
     let helper = detect_aur_helper().ok_or(AppError::AurHelperNotFound)?;
     let bin = helper.binary_name();
 
+    crate::backend::pacman::ensure_stale_db_lock_removed(ui_tx).await;
+
     let _ = ui_tx
         .send(UiEvent::InstallProgress {
             phase: format!(
@@ -543,21 +610,34 @@ pub async fn install_aur_packages_streaming(
                 .first()
                 .map(|n| (n.clone(), DependencyStatus::Downloading)),
             log_line: Some(format!(
-                "$ {bin} -S --noconfirm --needed --sudo pkexec {}",
+                "$ {bin} -S --aur --noconfirm --sudo pkexec {}",
                 targets.join(" ")
             )),
         })
         .await;
 
-    let mut child = Command::new(bin)
-        .env("LC_ALL", "C")
+    let mut cmd = Command::new(bin);
+    cmd.env("LC_ALL", "C")
         .env("PACMAN_AUTH", "pkexec")
         .stdin(Stdio::null())
-        .args(["-S", "--noconfirm", "--sudo", "pkexec"])
-        .args(targets)
+        .args(["-S", "--aur", "--noconfirm", "--sudo", "pkexec"]);
+    if matches!(helper, AurHelper::Yay) {
+        cmd.args([
+            "--answerclean",
+            "None",
+            "--answerdiff",
+            "None",
+            "--answeredit",
+            "None",
+            "--removemake",
+            "no",
+        ]);
+    }
+    cmd.args(targets)
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()?;
+        .stderr(Stdio::piped());
+
+    let mut child = cmd.spawn()?;
 
     let total_steps = (known_deps.len().max(1) * 2) as f64;
     let mut completed_steps = 0.0_f64;
@@ -650,146 +730,6 @@ pub async fn install_aur_packages_streaming(
         Ok(format!(
             "{} paquet(s) AUR installés/mis à jour avec succès via {}.",
             targets.len(),
-            helper.display_name()
-        ))
-    } else {
-        let detail = if stderr_buf.trim().is_empty() {
-            format!("Code de sortie {}", status.code().unwrap_or(1))
-        } else {
-            stderr_buf.trim().to_string()
-        };
-        Err(AppError::AurHelperError(detail))
-    }
-}
-
-/// Met à jour tous les paquets AUR disposant d'une mise à jour via `yay -Sua --noconfirm --sudo pkexec` (ou `paru`).
-pub async fn update_aur_all_streaming(
-    known_deps: &[String],
-    cancel_handle: &InstallCancelHandle,
-    ui_tx: &async_channel::Sender<UiEvent>,
-) -> AppResult<String> {
-    if cancel_handle.is_cancelled() {
-        return Err(AppError::AurHelperError(String::from(
-            "Mise à jour AUR annulée par l'utilisateur.",
-        )));
-    }
-
-    let helper = detect_aur_helper().ok_or(AppError::AurHelperNotFound)?;
-    let bin = helper.binary_name();
-
-    let _ = ui_tx
-        .send(UiEvent::InstallProgress {
-            phase: format!(
-                "Mise à jour des paquets AUR avec {} (`{bin} -Sua`)…",
-                helper.display_name()
-            ),
-            fraction: 0.55,
-            active_package: known_deps
-                .first()
-                .map(|n| (n.clone(), DependencyStatus::Downloading)),
-            log_line: Some(format!("$ {bin} -Sua --noconfirm --sudo pkexec")),
-        })
-        .await;
-
-    let mut child = Command::new(bin)
-        .env("LC_ALL", "C")
-        .env("PACMAN_AUTH", "pkexec")
-        .stdin(Stdio::null())
-        .args(["-Sua", "--noconfirm", "--sudo", "pkexec"])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()?;
-
-    let total_steps = (known_deps.len().max(1) * 2) as f64;
-    let mut completed_steps = 0.0_f64;
-
-    if let Some(stdout) = child.stdout.take() {
-        let mut reader = BufReader::new(stdout).lines();
-        loop {
-            let next_line_opt = tokio::select! {
-                _ = cancel_handle.notified() => {
-                    let _ = child.start_kill();
-                    let _ = child.wait().await;
-                    let _ = ui_tx
-                        .send(UiEvent::InstallProgress {
-                            phase: String::from("Mise à jour AUR annulée par l'utilisateur."),
-                            fraction: -1.0,
-                            active_package: None,
-                            log_line: Some(String::from("[Annulé] Mise à jour AUR interrompue à la demande de l'utilisateur.")),
-                        })
-                        .await;
-                    return Err(AppError::AurHelperError(String::from(
-                        "Mise à jour AUR annulée par l'utilisateur.",
-                    )));
-                }
-                res = reader.next_line() => res.ok().flatten(),
-            };
-
-            let Some(line) = next_line_opt else {
-                break;
-            };
-
-            if let Some((phase, active_pkg)) =
-                crate::backend::pacman::parse_pacman_progress_line(&line, known_deps)
-            {
-                if active_pkg.is_some() {
-                    completed_steps = (completed_steps + 1.0).min(total_steps);
-                }
-                let frac = (0.58 + 0.36 * (completed_steps / total_steps)).clamp(0.58, 0.96);
-                let _ = ui_tx
-                    .send(UiEvent::InstallProgress {
-                        phase,
-                        fraction: frac,
-                        active_package: active_pkg,
-                        log_line: Some(line),
-                    })
-                    .await;
-            } else {
-                let _ = ui_tx
-                    .send(UiEvent::InstallProgress {
-                        phase: String::new(),
-                        fraction: -1.0,
-                        active_package: None,
-                        log_line: Some(line),
-                    })
-                    .await;
-            }
-        }
-    }
-
-    let mut stderr_buf = String::new();
-    if let Some(stderr) = child.stderr.take() {
-        let mut reader = BufReader::new(stderr).lines();
-        while let Ok(Some(err_line)) = reader.next_line().await {
-            if !stderr_buf.is_empty() {
-                stderr_buf.push('\n');
-            }
-            stderr_buf.push_str(&err_line);
-            let _ = ui_tx
-                .send(UiEvent::InstallProgress {
-                    phase: String::new(),
-                    fraction: -1.0,
-                    active_package: None,
-                    log_line: Some(format!("[stderr] {err_line}")),
-                })
-                .await;
-        }
-    }
-
-    let status = tokio::select! {
-        _ = cancel_handle.notified() => {
-            let _ = child.start_kill();
-            let _ = child.wait().await;
-            return Err(AppError::AurHelperError(String::from(
-                "Mise à jour AUR annulée par l'utilisateur.",
-            )));
-        }
-        st = child.wait() => st?,
-    };
-
-    if status.success() {
-        Ok(format!(
-            "Mises à jour AUR terminées avec succès via {}.",
             helper.display_name()
         ))
     } else {

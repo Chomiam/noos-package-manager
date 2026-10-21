@@ -1,6 +1,6 @@
 # Maintainer: Chomiam <axel.valens@ik.me>
 pkgname=noos-package-manager
-pkgver=0.1.1
+pkgver=0.1.2
 pkgrel=1
 pkgdesc="Gestionnaire de paquets GTK4/Libadwaita (Pacman, AUR, Flatpak et AppImages)"
 arch=('x86_64' 'aarch64')

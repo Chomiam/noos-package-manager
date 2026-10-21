@@ -8,7 +8,7 @@ pub mod pacman;
 #[cfg(test)]
 mod tests;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use crate::backend::aur::AurClient;
@@ -91,6 +91,22 @@ pub async fn load_system_catalog() -> AppResult<CatalogSnapshot> {
         }
     };
 
+    // Seuls les paquets véritablement étrangers (`pacman -Qqm`) sont considérés comme installés depuis l'AUR.
+    // Cela évite qu'un paquet installé depuis un dépôt Pacman tiers (ex: chaotic-aur) soit dupliqué en tant que paquet AUR.
+    let foreign_set = pacman::list_foreign_package_names()
+        .await
+        .unwrap_or_default();
+    let foreign_installed_versions: HashMap<String, String> = all_installed_versions
+        .iter()
+        .filter(|(name, _)| foreign_set.contains(*name))
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+
+    let already_in_catalog: HashSet<String> = installed_packages
+        .iter()
+        .map(|pkg| pkg.name.clone())
+        .collect();
+
     // Enrichissement des paquets AUR installés et chargement de la sélection AUR populaire via RPC v5 `info`
     let mut aur_query_names: Vec<String> = installed_packages
         .iter()
@@ -99,7 +115,9 @@ pub async fn load_system_catalog() -> AppResult<CatalogSnapshot> {
         .collect();
 
     for &showcase_pkg in aur::POPULAR_AUR_SHOWCASE {
-        if !aur_query_names.iter().any(|n| n == showcase_pkg) {
+        if !already_in_catalog.contains(showcase_pkg)
+            && !aur_query_names.iter().any(|n| n == showcase_pkg)
+        {
             aur_query_names.push(showcase_pkg.to_string());
         }
     }
@@ -108,7 +126,7 @@ pub async fn load_system_catalog() -> AppResult<CatalogSnapshot> {
         if let Ok(aur_client) = AurClient::new() {
             let refs: Vec<&str> = aur_query_names.iter().map(String::as_str).collect();
             match aur_client
-                .fetch_enriched_aur_items(&refs, &all_installed_versions)
+                .fetch_enriched_aur_items(&refs, &foreign_installed_versions)
                 .await
             {
                 Ok(enriched_aur) => {
@@ -129,9 +147,11 @@ pub async fn load_system_catalog() -> AppResult<CatalogSnapshot> {
                         }
                     }
 
-                    // Ajout des paquets AUR populaires non encore installés pour le catalogue AUR
+                    // Ajout des paquets AUR populaires non encore installés (ni via Pacman ni via AUR) pour le catalogue AUR
                     for (_, extra_aur_pkg) in enriched_map {
-                        installed_packages.push(extra_aur_pkg);
+                        if !already_in_catalog.contains(&extra_aur_pkg.name) {
+                            installed_packages.push(extra_aur_pkg);
+                        }
                     }
                 }
                 Err(e) => {
@@ -233,11 +253,19 @@ pub async fn search_all_sources(query: &str) -> AppResult<(Vec<PackageItem>, Vec
     let installed_versions = pacman::list_all_installed_versions()
         .await
         .unwrap_or_default();
+    let foreign_set = pacman::list_foreign_package_names()
+        .await
+        .unwrap_or_default();
+    let foreign_installed_versions: HashMap<String, String> = installed_versions
+        .iter()
+        .filter(|(name, _)| foreign_set.contains(*name))
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
 
     let pacman_fut = pacman::search_packages(&trimmed, &updates_simple);
     let aur_fut = async {
         let client = AurClient::new()?;
-        client.search(&trimmed, &installed_versions).await
+        client.search(&trimmed, &foreign_installed_versions).await
     };
     let flatpak_fut = async {
         let fp_updates = flatpak::check_flatpak_updates_map()
@@ -612,8 +640,9 @@ pub async fn install_batch_with_progress(
 }
 
 /// Exécute la mise à jour globale de tous les paquets système (Pacman via `pkexec pacman -Syu`),
-/// AUR (via `yay -Sua` / `paru -Sua`) et Flatpak (`flatpak update`) avec suivi dans le Gestionnaire d'installation.
+/// AUR (via `yay` / `paru`) et Flatpak (`flatpak update`) avec suivi dans le Gestionnaire d'installation.
 pub async fn update_all_system_and_aur_with_progress(
+    catalog_update_items: &[PackageItem],
     cancel_handle: &InstallCancelHandle,
     ui_tx: &async_channel::Sender<UiEvent>,
 ) {
@@ -644,9 +673,37 @@ pub async fn update_all_system_and_aur_with_progress(
         flatpak::check_flatpak_updates_map()
     );
 
-    let pacman_updates = pacman_upd_res.unwrap_or_default();
-    let aur_updates = aur_upd_res.unwrap_or_default();
-    let flatpak_updates = flatpak_upd_res.unwrap_or_default();
+    let mut pacman_updates = pacman_upd_res.unwrap_or_default();
+    let mut aur_updates = aur_upd_res.unwrap_or_default();
+    let mut flatpak_updates = flatpak_upd_res.unwrap_or_default();
+    let mut appimage_updates = Vec::new();
+
+    for item in catalog_update_items {
+        let Some(ref new_ver) = item.update_available else {
+            continue;
+        };
+        match &item.source {
+            PackageSource::Pacman => {
+                pacman_updates
+                    .entry(item.name.clone())
+                    .or_insert_with(|| (item.version.clone(), new_ver.clone()));
+            }
+            PackageSource::Aur => {
+                aur_updates
+                    .entry(item.name.clone())
+                    .or_insert_with(|| (item.version.clone(), new_ver.clone()));
+            }
+            PackageSource::Flatpak => {
+                let app_id = item.flatpak_app_id().unwrap_or(&item.name).to_string();
+                flatpak_updates
+                    .entry(app_id)
+                    .or_insert_with(|| new_ver.clone());
+            }
+            PackageSource::AppImage(_) => {
+                appimage_updates.push(item.clone());
+            }
+        }
+    }
 
     let mut updated_ids = Vec::new();
     let mut dep_steps = Vec::new();
@@ -661,8 +718,10 @@ pub async fn update_all_system_and_aur_with_progress(
             status: DependencyStatus::Pending,
         });
     }
+    let mut aur_target_names = Vec::new();
     for (name, (_, new_ver)) in &aur_updates {
         updated_ids.push(format!("aur:{name}"));
+        aur_target_names.push(name.clone());
         dep_steps.push(DependencyStepItem {
             name: name.clone(),
             version: new_ver.clone(),
@@ -683,6 +742,9 @@ pub async fn update_all_system_and_aur_with_progress(
             status: DependencyStatus::Pending,
         });
     }
+    for app_item in &appimage_updates {
+        updated_ids.push(app_item.id.clone());
+    }
 
     let known_names: Vec<String> = dep_steps.iter().map(|d| d.name.clone()).collect();
 
@@ -695,7 +757,9 @@ pub async fn update_all_system_and_aur_with_progress(
 
     let mut summaries = Vec::new();
 
-    if !pacman_updates.is_empty() || (aur_updates.is_empty() && flatpak_updates.is_empty()) {
+    if !pacman_updates.is_empty()
+        || (aur_updates.is_empty() && flatpak_updates.is_empty() && appimage_updates.is_empty())
+    {
         match pacman::update_pacman_all_streaming(&known_names, cancel_handle, ui_tx).await {
             Ok(msg) => summaries.push(msg),
             Err(err) => {
@@ -711,8 +775,15 @@ pub async fn update_all_system_and_aur_with_progress(
         }
     }
 
-    if !aur_updates.is_empty() {
-        match aur::update_aur_all_streaming(&known_names, cancel_handle, ui_tx).await {
+    if !aur_target_names.is_empty() {
+        match aur::install_aur_packages_streaming(
+            &aur_target_names,
+            &known_names,
+            cancel_handle,
+            ui_tx,
+        )
+        .await
+        {
             Ok(msg) => summaries.push(msg),
             Err(err) => {
                 let _ = ui_tx
@@ -735,6 +806,25 @@ pub async fn update_all_system_and_aur_with_progress(
                     .send(UiEvent::InstallFinished {
                         success: false,
                         message: format!("Échec de la mise à jour Flatpak : {err}"),
+                        installed_ids: Vec::new(),
+                    })
+                    .await;
+                return;
+            }
+        }
+    }
+
+    for app_item in &appimage_updates {
+        match appimage::update_appimage_from_github(app_item).await {
+            Ok(msg) => summaries.push(msg),
+            Err(err) => {
+                let _ = ui_tx
+                    .send(UiEvent::InstallFinished {
+                        success: false,
+                        message: format!(
+                            "Échec de la mise à jour AppImage « {} » : {err}",
+                            app_item.name
+                        ),
                         installed_ids: Vec::new(),
                     })
                     .await;

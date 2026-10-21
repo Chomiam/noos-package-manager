@@ -32,12 +32,15 @@ fn wrap_in_fixed_column(child: &impl IsA<gtk4::Widget>, width: i32) -> gtk4::Box
 
 /// Construit la ligne d'en-tête des colonnes pour l'onglet AUR afin d'aligner au pixel près :
 /// `Paquet | Votes | Popularité | Mainteneur | Mise à jour | Version | Actions`.
-pub fn build_aur_columns_header_row() -> adw::ActionRow {
-    let header_row = adw::ActionRow::builder()
-        .title("PAQUET")
-        .title_lines(1)
-        .css_classes(["aur-table-header-row"])
-        .activatable(false)
+pub fn build_aur_columns_header_row() -> gtk4::ListBoxRow {
+    let hbox = gtk4::Box::builder()
+        .orientation(gtk4::Orientation::Horizontal)
+        .spacing(12)
+        .margin_start(12)
+        .margin_end(12)
+        .margin_top(2)
+        .margin_bottom(2)
+        .valign(gtk4::Align::Center)
         .build();
 
     // Même préfixe exact (case à cocher 24px + espacement 10px + icône 36px) pour aligner "PAQUET"
@@ -51,7 +54,17 @@ pub fn build_aur_columns_header_row() -> adw::ActionRow {
         .build();
     header_prefix.append(&check_spacer);
     header_prefix.append(&icon_spacer);
-    header_row.add_prefix(&header_prefix);
+    hbox.append(&header_prefix);
+
+    let paquet_lbl = gtk4::Label::builder()
+        .label("PAQUET")
+        .hexpand(true)
+        .xalign(0.0)
+        .valign(gtk4::Align::Center)
+        .ellipsize(gtk4::pango::EllipsizeMode::End)
+        .css_classes(["aur-col-header-label"])
+        .build();
+    hbox.append(&paquet_lbl);
 
     let suffix_box = gtk4::Box::new(gtk4::Orientation::Horizontal, AUR_COL_SPACING);
     suffix_box.set_valign(gtk4::Align::Center);
@@ -70,6 +83,7 @@ pub fn build_aur_columns_header_row() -> adw::ActionRow {
             .label(title)
             .hexpand(true)
             .xalign(xalign)
+            .valign(gtk4::Align::Center)
             .width_chars(1)
             .max_width_chars(1)
             .ellipsize(gtk4::pango::EllipsizeMode::End)
@@ -78,14 +92,21 @@ pub fn build_aur_columns_header_row() -> adw::ActionRow {
         suffix_box.append(&wrap_in_fixed_column(&lbl, width));
     }
 
-    header_row.add_suffix(&suffix_box);
-    header_row
+    hbox.append(&suffix_box);
+
+    gtk4::ListBoxRow::builder()
+        .activatable(false)
+        .selectable(false)
+        .css_classes(["aur-table-header-row"])
+        .child(&hbox)
+        .build()
 }
 
 pub fn build_package_action_row<F, I>(
     item: &PackageItem,
     is_checked: bool,
     show_source_badge: bool,
+    use_aur_columns: bool,
     cmd_tx: &Sender<BackendCommand>,
     on_check_changed: F,
     on_info_clicked: I,
@@ -94,7 +115,7 @@ where
     F: Fn(bool) + 'static,
     I: Fn() + 'static,
 {
-    let is_aur_row = item.aur_meta.is_some();
+    let is_aur_row = use_aur_columns && item.aur_meta.is_some();
     let escaped_title = gtk4::glib::markup_escape_text(&item.name);
 
     let row = if is_aur_row {
@@ -174,7 +195,7 @@ where
     let suffix_box = gtk4::Box::new(gtk4::Orientation::Horizontal, AUR_COL_SPACING);
     suffix_box.set_valign(gtk4::Align::Center);
 
-    if let Some(ref meta) = item.aur_meta {
+    if let (true, Some(meta)) = (is_aur_row, item.aur_meta.as_ref()) {
         // Si le paquet est marqué comme obsolète (Out-of-Date), afficher le panneau warning à gauche des 6 colonnes fixes
         if let Some(out_ts) = meta.out_of_date {
             let out_full = format_unix_timestamp(out_ts);

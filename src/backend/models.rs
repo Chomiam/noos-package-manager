@@ -92,8 +92,7 @@ impl AurSortMode {
                 let pop_a = ma.map(|m| m.popularity).unwrap_or(0.0);
                 let pop_b = mb.map(|m| m.popularity).unwrap_or(0.0);
                 pop_b
-                    .partial_cmp(&pop_a)
-                    .unwrap_or(Ordering::Equal)
+                    .total_cmp(&pop_a)
                     .then_with(|| {
                         let va = ma.map(|m| m.votes).unwrap_or(0);
                         let vb = mb.map(|m| m.votes).unwrap_or(0);
@@ -108,7 +107,7 @@ impl AurSortMode {
                     .then_with(|| {
                         let pop_a = ma.map(|m| m.popularity).unwrap_or(0.0);
                         let pop_b = mb.map(|m| m.popularity).unwrap_or(0.0);
-                        pop_b.partial_cmp(&pop_a).unwrap_or(Ordering::Equal)
+                        pop_b.total_cmp(&pop_a)
                     })
                     .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
             }
@@ -142,13 +141,6 @@ impl PackageItem {
 
     pub fn flatpak_app_id(&self) -> Option<&str> {
         self.id.strip_prefix("flatpak:")
-    }
-
-    pub fn is_aur_out_of_date(&self) -> bool {
-        self.aur_meta
-            .as_ref()
-            .and_then(|m| m.out_of_date)
-            .is_some()
     }
 
     pub fn truncated_description(&self, max_chars: usize) -> String {

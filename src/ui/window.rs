@@ -21,6 +21,7 @@ use crate::ui::messages::{BackendCommand, UiEvent};
 use crate::ui::row::{build_aur_columns_header_row, build_package_action_row};
 
 const MAX_RENDERED_ROWS: usize = 250;
+const AUR_PAGE_SIZE: usize = 8;
 
 #[derive(Default)]
 struct AppUiState {
@@ -32,6 +33,7 @@ struct AppUiState {
     active_query: String,
     selected_category: SidebarCategory,
     aur_sort_mode: AurSortMode,
+    aur_current_page: usize,
     updates_count: usize,
     aur_helper: Option<AurHelper>,
     active_groups: Vec<adw::PreferencesGroup>,
@@ -363,6 +365,7 @@ pub fn build_main_window(app: &adw::Application) -> adw::ApplicationWindow {
             {
                 let mut st = state_sort.borrow_mut();
                 st.aur_sort_mode = mode;
+                st.aur_current_page = 0;
             }
             rebuild_package_list_ui(
                 &state_sort,
@@ -450,6 +453,7 @@ pub fn build_main_window(app: &adw::Application) -> adw::ApplicationWindow {
             {
                 let mut st = state_cat.borrow_mut();
                 st.selected_category = category;
+                st.aur_current_page = 0;
             }
             nav_content.set_title(category.title());
 
@@ -481,6 +485,7 @@ pub fn build_main_window(app: &adw::Application) -> adw::ApplicationWindow {
             let prev_source = {
                 let mut st = state_search.borrow_mut();
                 st.active_query = text.clone();
+                st.aur_current_page = 0;
                 if text.is_empty() {
                     st.search_results = None;
                 }
@@ -551,10 +556,19 @@ pub fn build_main_window(app: &adw::Application) -> adw::ApplicationWindow {
 
     // --- Connexion du bouton "Tout mettre à jour" ---
     {
+        let state_upd_all = Rc::clone(&state);
         let tx_upd_all = cmd_tx.clone();
         update_all_btn.connect_clicked(move |btn| {
+            let items: Vec<PackageItem> = {
+                let st = state_upd_all.borrow();
+                st.catalog_packages
+                    .iter()
+                    .filter(|p| p.update_available.is_some())
+                    .cloned()
+                    .collect()
+            };
             btn.set_sensitive(false);
-            let _ = tx_upd_all.send(BackendCommand::UpdateAllSystem);
+            let _ = tx_upd_all.send(BackendCommand::UpdateAllSystem { items });
         });
     }
 
@@ -944,11 +958,12 @@ fn make_row_with_selection(
     actions: &HeaderActionButtons,
     cmd_tx: &Sender<BackendCommand>,
 ) -> adw::ActionRow {
-    let (is_checked, show_source_badge) = {
+    let (is_checked, show_source_badge, use_aur_columns) = {
         let st = state_rc.borrow();
         (
             st.selected_packages.contains_key(&item.id),
             matches!(st.selected_category, SidebarCategory::Installed),
+            matches!(st.selected_category, SidebarCategory::Aur),
         )
     };
     let state_for_check = Rc::clone(state_rc);
@@ -963,6 +978,7 @@ fn make_row_with_selection(
         item,
         is_checked,
         show_source_badge,
+        use_aur_columns,
         cmd_tx,
         move |checked| {
             {
@@ -990,7 +1006,7 @@ fn rebuild_package_list_ui(
     prefs_page: &adw::PreferencesPage,
     stack: &gtk4::Stack,
     empty_status_page: &adw::StatusPage,
-    badges: &CategoryBadgeWidgets,
+    badges: &Rc<CategoryBadgeWidgets>,
     actions: &HeaderActionButtons,
     cmd_tx: &Sender<BackendCommand>,
 ) {
@@ -1119,11 +1135,7 @@ fn rebuild_package_list_ui(
             let sort_mode = st.aur_sort_mode;
             items.sort_by(|a, b| sort_mode.compare_items(a, b));
         } else if matches!(cat, SidebarCategory::All) && !has_remote {
-            let sort_mode = st.aur_sort_mode;
-            items.sort_by(|a, b| match (&a.source, &b.source) {
-                (PackageSource::Aur, PackageSource::Aur) => sort_mode.compare_items(a, b),
-                _ => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
-            });
+            items.sort_by_key(|a| a.name.to_lowercase());
         }
 
         let filtered_recs: Vec<(RecommendationCategory, Vec<PackageItem>)> = st
@@ -1408,29 +1420,173 @@ fn rebuild_package_list_ui(
         return;
     }
 
-    let total_found = filtered_items.len();
-    let displayed_count = total_found.min(MAX_RENDERED_ROWS);
+    // Dans l'onglet Mises à jour : tri alphabétique et catégorisation en Pacman, AUR, Flatpak et AppImages
+    if matches!(category, SidebarCategory::Updates) {
+        let mut sorted_updates = filtered_items;
+        sorted_updates.sort_by_key(|a| a.name.to_lowercase());
 
-    let helper_note = match (category, aur_helper) {
-        (SidebarCategory::Aur, Some(h)) => {
-            format!(" · Assistant AUR détecté : {}", h.display_name())
+        let pacman_upds: Vec<&PackageItem> = sorted_updates
+            .iter()
+            .filter(|p| matches!(p.source, PackageSource::Pacman))
+            .collect();
+        let aur_upds: Vec<&PackageItem> = sorted_updates
+            .iter()
+            .filter(|p| matches!(p.source, PackageSource::Aur))
+            .collect();
+        let flatpak_upds: Vec<&PackageItem> = sorted_updates
+            .iter()
+            .filter(|p| matches!(p.source, PackageSource::Flatpak))
+            .collect();
+        let appimage_upds: Vec<&PackageItem> = sorted_updates
+            .iter()
+            .filter(|p| matches!(p.source, PackageSource::AppImage(_)))
+            .collect();
+
+        let sections: [(&str, &str, Vec<&PackageItem>); 4] = [
+            (
+                "Pacman · Dépôts officiels",
+                "Mises à jour des paquets système Arch Linux synchronisés via Pacman",
+                pacman_upds,
+            ),
+            (
+                "AUR · Arch User Repository",
+                "Mises à jour des paquets communautaires AUR compilés via Yay / Paru",
+                aur_upds,
+            ),
+            (
+                "Flatpak · Applications Flathub",
+                "Mises à jour des applications conteneurisées Flatpak",
+                flatpak_upds,
+            ),
+            (
+                "AppImages · Applications portables",
+                "Mises à jour disponibles sur GitHub Releases pour ~/Applications",
+                appimage_upds,
+            ),
+        ];
+
+        for (sec_title, sec_desc, sec_items) in sections {
+            if sec_items.is_empty() {
+                continue;
+            }
+            let full_title = format!("{sec_title} ({})", sec_items.len());
+            let escaped_title = glib::markup_escape_text(&full_title);
+            let escaped_desc = glib::markup_escape_text(sec_desc);
+            let sec_group = adw::PreferencesGroup::builder()
+                .title(escaped_title.as_str())
+                .description(escaped_desc.as_str())
+                .build();
+
+            for item in sec_items {
+                let row = make_row_with_selection(item, state_rc, actions, cmd_tx);
+                sec_group.add(&row);
+            }
+
+            prefs_page.add(&sec_group);
+            created_groups.push(sec_group);
         }
-        (SidebarCategory::Aur, None) => {
-            String::from(" · Aucun assistant AUR détecté (paru/yay)")
+
+        state_rc.borrow_mut().active_groups = created_groups;
+        stack.set_visible_child_name("list");
+        return;
+    }
+
+    let total_found = filtered_items.len();
+
+    // Dans l'onglet AUR : pagination par pages de AUR_PAGE_SIZE paquets, sans bannière générale d'obsolescence
+    if matches!(category, SidebarCategory::Aur) {
+        let total_pages = total_found.div_ceil(AUR_PAGE_SIZE).max(1);
+        let current_page = {
+            let mut st = state_rc.borrow_mut();
+            if st.aur_current_page >= total_pages {
+                st.aur_current_page = total_pages - 1;
+            }
+            st.aur_current_page
+        };
+
+        let start_idx = current_page * AUR_PAGE_SIZE;
+        let end_idx = (start_idx + AUR_PAGE_SIZE).min(total_found);
+        let page_slice = &filtered_items[start_idx..end_idx];
+
+        let helper_note = match aur_helper {
+            Some(h) => format!(" · Assistant AUR détecté : {}", h.display_name()),
+            None => String::from(" · Aucun assistant AUR détecté (paru/yay)"),
+        };
+
+        let group_desc = format!(
+            "{} — Page {} sur {} (paquets {} à {} sur {}){helper_note}",
+            category.subtitle(),
+            current_page + 1,
+            total_pages,
+            start_idx + 1,
+            end_idx,
+            total_found
+        );
+
+        let escaped_group_title = glib::markup_escape_text(category.title());
+        let escaped_group_desc = glib::markup_escape_text(&group_desc);
+        let group = adw::PreferencesGroup::builder()
+            .title(escaped_group_title.as_str())
+            .description(escaped_group_desc.as_str())
+            .build();
+
+        if total_pages > 1 {
+            let top_nav = build_aur_header_pagination_box(
+                current_page,
+                total_pages,
+                state_rc,
+                prefs_page,
+                stack,
+                empty_status_page,
+                badges,
+                actions,
+                cmd_tx,
+            );
+            group.set_header_suffix(Some(&top_nav));
         }
-        _ => String::new(),
-    };
+
+        let header_cols_row = build_aur_columns_header_row();
+        group.add(&header_cols_row);
+
+        for item in page_slice {
+            let row = make_row_with_selection(item, state_rc, actions, cmd_tx);
+            group.add(&row);
+        }
+
+        if total_pages > 1 {
+            let pagination_row = build_aur_pagination_row(
+                current_page,
+                total_pages,
+                total_found,
+                start_idx,
+                end_idx,
+                state_rc,
+                prefs_page,
+                stack,
+                empty_status_page,
+                badges,
+                actions,
+                cmd_tx,
+            );
+            group.add(&pagination_row);
+        }
+
+        prefs_page.add(&group);
+        created_groups.push(group);
+        state_rc.borrow_mut().active_groups = created_groups;
+        stack.set_visible_child_name("list");
+        return;
+    }
+
+    let displayed_count = total_found.min(MAX_RENDERED_ROWS);
 
     let group_desc = if total_found > MAX_RENDERED_ROWS {
         format!(
-            "{} — Affichage des {displayed_count} premiers résultats sur {total_found}{helper_note}",
+            "{} — Affichage des {displayed_count} premiers résultats sur {total_found}",
             category.subtitle()
         )
     } else {
-        format!(
-            "{} — {total_found} paquet(s){helper_note}",
-            category.subtitle()
-        )
+        format!("{} — {total_found} paquet(s)", category.subtitle())
     };
 
     let escaped_group_title = glib::markup_escape_text(category.title());
@@ -1439,36 +1595,6 @@ fn rebuild_package_list_ui(
         .title(escaped_group_title.as_str())
         .description(escaped_group_desc.as_str())
         .build();
-
-    if matches!(category, SidebarCategory::Aur) {
-        let obsolete_pkgs: Vec<&str> = filtered_items
-            .iter()
-            .filter(|p| p.is_aur_out_of_date())
-            .map(|p| p.name.as_str())
-            .collect();
-
-        if !obsolete_pkgs.is_empty() {
-            let warn_title = format!(
-                "⚠️ {} paquet(s) AUR marqué(s) comme obsolète(s) (Out-of-Date)",
-                obsolete_pkgs.len()
-            );
-            let warn_sub = format!(
-                "Les paquets suivants ont été signalés comme obsolètes sur AUR : {}",
-                obsolete_pkgs.join(", ")
-            );
-            let warn_row = adw::ActionRow::builder()
-                .title(glib::markup_escape_text(&warn_title).as_str())
-                .subtitle(glib::markup_escape_text(&warn_sub).as_str())
-                .build();
-            let warn_icon = gtk4::Image::from_icon_name("dialog-warning-symbolic");
-            warn_icon.set_pixel_size(24);
-            warn_row.add_prefix(&warn_icon);
-            group.add(&warn_row);
-        }
-
-        let header_cols_row = build_aur_columns_header_row();
-        group.add(&header_cols_row);
-    }
 
     for item in filtered_items.iter().take(MAX_RENDERED_ROWS) {
         let row = make_row_with_selection(item, state_rc, actions, cmd_tx);
@@ -1479,6 +1605,267 @@ fn rebuild_package_list_ui(
     created_groups.push(group);
     state_rc.borrow_mut().active_groups = created_groups;
     stack.set_visible_child_name("list");
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_aur_header_pagination_box(
+    current_page: usize,
+    total_pages: usize,
+    state_rc: &Rc<RefCell<AppUiState>>,
+    prefs_page: &adw::PreferencesPage,
+    stack: &gtk4::Stack,
+    empty_status_page: &adw::StatusPage,
+    badges: &Rc<CategoryBadgeWidgets>,
+    actions: &HeaderActionButtons,
+    cmd_tx: &Sender<BackendCommand>,
+) -> gtk4::Box {
+    let nav_box = gtk4::Box::builder()
+        .orientation(gtk4::Orientation::Horizontal)
+        .spacing(6)
+        .valign(gtk4::Align::Center)
+        .build();
+
+    let prev_btn = gtk4::Button::builder()
+        .icon_name("go-previous-symbolic")
+        .sensitive(current_page > 0)
+        .tooltip_text("Page précédente")
+        .build();
+    {
+        let st_clone = Rc::clone(state_rc);
+        let page_clone = prefs_page.clone();
+        let stack_clone = stack.clone();
+        let empty_clone = empty_status_page.clone();
+        let badges_clone = Rc::clone(badges);
+        let actions_clone = actions.clone();
+        let tx_clone = cmd_tx.clone();
+        prev_btn.connect_clicked(move |_| {
+            {
+                let mut st = st_clone.borrow_mut();
+                st.aur_current_page = st.aur_current_page.saturating_sub(1);
+            }
+            rebuild_package_list_ui(
+                &st_clone,
+                &page_clone,
+                &stack_clone,
+                &empty_clone,
+                &badges_clone,
+                &actions_clone,
+                &tx_clone,
+            );
+        });
+    }
+    nav_box.append(&prev_btn);
+
+    let page_lbl = gtk4::Label::builder()
+        .label(format!("Page {} / {}", current_page + 1, total_pages))
+        .margin_start(4)
+        .margin_end(4)
+        .css_classes(["dim-label"])
+        .build();
+    nav_box.append(&page_lbl);
+
+    let next_btn = gtk4::Button::builder()
+        .icon_name("go-next-symbolic")
+        .sensitive(current_page + 1 < total_pages)
+        .tooltip_text("Page suivante")
+        .build();
+    {
+        let st_clone = Rc::clone(state_rc);
+        let page_clone = prefs_page.clone();
+        let stack_clone = stack.clone();
+        let empty_clone = empty_status_page.clone();
+        let badges_clone = Rc::clone(badges);
+        let actions_clone = actions.clone();
+        let tx_clone = cmd_tx.clone();
+        next_btn.connect_clicked(move |_| {
+            {
+                let mut st = st_clone.borrow_mut();
+                if st.aur_current_page + 1 < total_pages {
+                    st.aur_current_page += 1;
+                }
+            }
+            rebuild_package_list_ui(
+                &st_clone,
+                &page_clone,
+                &stack_clone,
+                &empty_clone,
+                &badges_clone,
+                &actions_clone,
+                &tx_clone,
+            );
+        });
+    }
+    nav_box.append(&next_btn);
+
+    nav_box
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_aur_pagination_row(
+    current_page: usize,
+    total_pages: usize,
+    total_found: usize,
+    start_idx: usize,
+    end_idx: usize,
+    state_rc: &Rc<RefCell<AppUiState>>,
+    prefs_page: &adw::PreferencesPage,
+    stack: &gtk4::Stack,
+    empty_status_page: &adw::StatusPage,
+    badges: &Rc<CategoryBadgeWidgets>,
+    actions: &HeaderActionButtons,
+    cmd_tx: &Sender<BackendCommand>,
+) -> gtk4::ListBoxRow {
+    let hbox = gtk4::Box::builder()
+        .orientation(gtk4::Orientation::Horizontal)
+        .spacing(8)
+        .margin_start(14)
+        .margin_end(14)
+        .margin_top(6)
+        .margin_bottom(6)
+        .valign(gtk4::Align::Center)
+        .build();
+
+    let info_lbl = gtk4::Label::builder()
+        .label(format!(
+            "Paquets {}–{} sur {} (Page {} / {})",
+            start_idx + 1,
+            end_idx,
+            total_found,
+            current_page + 1,
+            total_pages
+        ))
+        .xalign(0.0)
+        .hexpand(true)
+        .css_classes(["dim-label"])
+        .build();
+    hbox.append(&info_lbl);
+
+    let nav_box = gtk4::Box::builder()
+        .orientation(gtk4::Orientation::Horizontal)
+        .spacing(6)
+        .valign(gtk4::Align::Center)
+        .build();
+
+    let prev_btn = gtk4::Button::builder()
+        .label("← Précédent")
+        .sensitive(current_page > 0)
+        .tooltip_text("Aller à la page précédente de paquets AUR")
+        .build();
+    {
+        let st_clone = Rc::clone(state_rc);
+        let page_clone = prefs_page.clone();
+        let stack_clone = stack.clone();
+        let empty_clone = empty_status_page.clone();
+        let badges_clone = Rc::clone(badges);
+        let actions_clone = actions.clone();
+        let tx_clone = cmd_tx.clone();
+        prev_btn.connect_clicked(move |_| {
+            {
+                let mut st = st_clone.borrow_mut();
+                st.aur_current_page = st.aur_current_page.saturating_sub(1);
+            }
+            rebuild_package_list_ui(
+                &st_clone,
+                &page_clone,
+                &stack_clone,
+                &empty_clone,
+                &badges_clone,
+                &actions_clone,
+                &tx_clone,
+            );
+        });
+    }
+    nav_box.append(&prev_btn);
+
+    let max_visible_buttons = 7usize;
+    let half = max_visible_buttons / 2;
+    let start_page = if total_pages <= max_visible_buttons || current_page <= half {
+        0
+    } else if current_page + half >= total_pages {
+        total_pages - max_visible_buttons
+    } else {
+        current_page - half
+    };
+    let end_page = (start_page + max_visible_buttons).min(total_pages);
+
+    for page_idx in start_page..end_page {
+        let page_btn = gtk4::Button::builder()
+            .label((page_idx + 1).to_string())
+            .valign(gtk4::Align::Center)
+            .tooltip_text(format!("Aller à la page {}", page_idx + 1))
+            .build();
+        if page_idx == current_page {
+            page_btn.add_css_class("suggested-action");
+            page_btn.set_sensitive(false);
+        } else {
+            page_btn.add_css_class("flat");
+            let st_clone = Rc::clone(state_rc);
+            let page_clone = prefs_page.clone();
+            let stack_clone = stack.clone();
+            let empty_clone = empty_status_page.clone();
+            let badges_clone = Rc::clone(badges);
+            let actions_clone = actions.clone();
+            let tx_clone = cmd_tx.clone();
+            page_btn.connect_clicked(move |_| {
+                {
+                    let mut st = st_clone.borrow_mut();
+                    st.aur_current_page = page_idx;
+                }
+                rebuild_package_list_ui(
+                    &st_clone,
+                    &page_clone,
+                    &stack_clone,
+                    &empty_clone,
+                    &badges_clone,
+                    &actions_clone,
+                    &tx_clone,
+                );
+            });
+        }
+        nav_box.append(&page_btn);
+    }
+
+    let next_btn = gtk4::Button::builder()
+        .label("Suivant →")
+        .sensitive(current_page + 1 < total_pages)
+        .tooltip_text("Aller à la page suivante de paquets AUR")
+        .build();
+    {
+        let st_clone = Rc::clone(state_rc);
+        let page_clone = prefs_page.clone();
+        let stack_clone = stack.clone();
+        let empty_clone = empty_status_page.clone();
+        let badges_clone = Rc::clone(badges);
+        let actions_clone = actions.clone();
+        let tx_clone = cmd_tx.clone();
+        next_btn.connect_clicked(move |_| {
+            {
+                let mut st = st_clone.borrow_mut();
+                if st.aur_current_page + 1 < total_pages {
+                    st.aur_current_page += 1;
+                }
+            }
+            rebuild_package_list_ui(
+                &st_clone,
+                &page_clone,
+                &stack_clone,
+                &empty_clone,
+                &badges_clone,
+                &actions_clone,
+                &tx_clone,
+            );
+        });
+    }
+    nav_box.append(&next_btn);
+
+    hbox.append(&nav_box);
+
+    gtk4::ListBoxRow::builder()
+        .activatable(false)
+        .selectable(false)
+        .css_classes(["aur-pagination-row"])
+        .child(&hbox)
+        .build()
 }
 
 fn build_appimage_dropzone_group(cmd_tx: &Sender<BackendCommand>) -> adw::PreferencesGroup {
@@ -1994,8 +2381,8 @@ async fn handle_backend_command(
                 }
             }
         }
-        BackendCommand::UpdateAllSystem => {
-            backend::update_all_system_and_aur_with_progress(cancel_handle, ui_tx).await;
+        BackendCommand::UpdateAllSystem { items } => {
+            backend::update_all_system_and_aur_with_progress(&items, cancel_handle, ui_tx).await;
         }
     }
 }

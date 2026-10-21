@@ -41,7 +41,9 @@ pub enum BackendCommand {
         app_id: String,
         name: String,
     },
-    UpdateAllSystem,
+    UpdateAllSystem {
+        items: Vec<PackageItem>,
+    },
 }
 
 #[derive(Debug, Clone)]

@@ -323,9 +323,107 @@ pub async fn list_all_installed_versions() -> AppResult<HashMap<String, String>>
     Ok(map)
 }
 
+const PACMAN_UNLOCK_AND_EXEC_SCRIPT: &str = "if [ -f /var/lib/pacman/db.lck ] && ! pgrep -x pacman >/dev/null 2>&1; then rm -f /var/lib/pacman/db.lck; fi; \
+rm -rf /var/lib/pacman/sync/download-* 2>/dev/null || true; \
+SYNCED_FROM_CHECKUP=0; \
+for d in /tmp/checkup-db-*/sync; do \
+    if [ -d \"$d\" ] && ls \"$d\"/*.db >/dev/null 2>&1; then \
+        cp -f \"$d\"/*.db /var/lib/pacman/sync/ 2>/dev/null && SYNCED_FROM_CHECKUP=1; \
+    fi; \
+done; \
+if [ \"$SYNCED_FROM_CHECKUP\" = \"1\" ] && [ \"$1\" = \"-Syu\" ]; then \
+    shift; exec pacman -Su \"$@\"; \
+elif [ \"$SYNCED_FROM_CHECKUP\" = \"1\" ] && [ \"$1\" = \"-Sy\" ]; then \
+    shift; exec pacman -S \"$@\"; \
+else \
+    exec pacman \"$@\"; \
+fi";
+
+/// Vérifie si un processus `pacman` est actuellement en cours d'exécution.
+pub async fn is_pacman_process_running() -> bool {
+    Command::new("pgrep")
+        .args(["-x", "pacman"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .await
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+/// Si une autre instance de `pacman` tourne en arrière-plan, attend sa fin en informant l'interface.
+pub async fn wait_for_active_pacman(ui_tx: &async_channel::Sender<UiEvent>) {
+    for attempt in 0..120 {
+        if !is_pacman_process_running().await {
+            return;
+        }
+        if attempt == 0 {
+            let _ = ui_tx
+                .send(UiEvent::InstallProgress {
+                    phase: String::from(
+                        "Une autre opération Pacman est en cours, attente de la libération de la base…",
+                    ),
+                    fraction: 0.03,
+                    active_package: None,
+                    log_line: Some(String::from(
+                        "[Attente] Une autre instance de `pacman` est active ; attente de la libération de /var/lib/pacman/db.lck…",
+                    )),
+                })
+                .await;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    }
+}
+
+/// Supprime un éventuel verrou `/var/lib/pacman/db.lck` orphelin avant d'exécuter un assistant externe (`yay`/`paru`).
+pub async fn ensure_stale_db_lock_removed(ui_tx: &async_channel::Sender<UiEvent>) {
+    wait_for_active_pacman(ui_tx).await;
+    if std::path::Path::new("/var/lib/pacman/db.lck").exists()
+        && !is_pacman_process_running().await
+    {
+        let _ = ui_tx
+            .send(UiEvent::InstallProgress {
+                phase: String::from("Suppression du verrou Pacman orphelin (/var/lib/pacman/db.lck)…"),
+                fraction: 0.04,
+                active_package: None,
+                log_line: Some(String::from(
+                    "$ pkexec rm -f /var/lib/pacman/db.lck",
+                )),
+            })
+            .await;
+        let _ = Command::new("pkexec")
+            .env("LC_ALL", "C")
+            .stdin(Stdio::null())
+            .args(["rm", "-f", "/var/lib/pacman/db.lck"])
+            .output()
+            .await;
+    }
+}
+
+async fn clean_stale_checkupdates_lock() {
+    if let Some(db_dir) = find_checkupdates_db_dir() {
+        let lock_file = db_dir.join("db.lck");
+        if lock_file.exists() {
+            let checkup_running = Command::new("pgrep")
+                .args(["-x", "checkupdates"])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .await
+                .map(|s| s.success())
+                .unwrap_or(false);
+            if !checkup_running {
+                let _ = std::fs::remove_file(lock_file);
+            }
+        }
+    }
+}
+
 /// Détecte les mises à jour disponibles via `checkupdates` (avec repli sur `pacman -Qu`).
 /// Renvoie une table `nom_du_paquet -> (ancienne_version, nouvelle_version)`.
 pub async fn check_updates_map() -> AppResult<HashMap<String, (String, String)>> {
+    clean_stale_checkupdates_lock().await;
+
     let checkupdates_res = Command::new("checkupdates")
         .env("LC_ALL", "C")
         .output()
@@ -456,7 +554,16 @@ pub async fn install_package(pkg_name: &str) -> AppResult<String> {
     let output = Command::new("pkexec")
         .env("LC_ALL", "C")
         .stdin(Stdio::null())
-        .args(["pacman", "-Sy", "--noconfirm", "--needed", pkg_name])
+        .args([
+            "sh",
+            "-c",
+            PACMAN_UNLOCK_AND_EXEC_SCRIPT,
+            "--",
+            "-Sy",
+            "--noconfirm",
+            "--needed",
+            pkg_name,
+        ])
         .output()
         .await?;
 
@@ -477,7 +584,15 @@ pub async fn update_package(pkg_name: &str) -> AppResult<String> {
     let output = Command::new("pkexec")
         .env("LC_ALL", "C")
         .stdin(Stdio::null())
-        .args(["pacman", "-Sy", "--noconfirm", pkg_name])
+        .args([
+            "sh",
+            "-c",
+            PACMAN_UNLOCK_AND_EXEC_SCRIPT,
+            "--",
+            "-Sy",
+            "--noconfirm",
+            pkg_name,
+        ])
         .output()
         .await?;
 
@@ -498,7 +613,14 @@ pub async fn update_all_system_packages() -> AppResult<String> {
     let output = Command::new("pkexec")
         .env("LC_ALL", "C")
         .stdin(Stdio::null())
-        .args(["pacman", "-Syu", "--noconfirm"])
+        .args([
+            "sh",
+            "-c",
+            PACMAN_UNLOCK_AND_EXEC_SCRIPT,
+            "--",
+            "-Syu",
+            "--noconfirm",
+        ])
         .output()
         .await?;
 
@@ -521,7 +643,15 @@ pub async fn remove_package(pkg_name: &str) -> AppResult<String> {
     let output = Command::new("pkexec")
         .env("LC_ALL", "C")
         .stdin(Stdio::null())
-        .args(["pacman", "-Rns", "--noconfirm", pkg_name])
+        .args([
+            "sh",
+            "-c",
+            PACMAN_UNLOCK_AND_EXEC_SCRIPT,
+            "--",
+            "-Rns",
+            "--noconfirm",
+            pkg_name,
+        ])
         .output()
         .await?;
 
@@ -785,13 +915,19 @@ pub async fn install_packages_streaming(
         )));
     }
 
+    wait_for_active_pacman(ui_tx).await;
+
     let base_args: &[&str] = if has_updates {
-        &["pacman", "-Sy", "--noconfirm"]
+        &["-Sy", "--noconfirm"]
     } else {
-        &["pacman", "-Sy", "--noconfirm", "--needed"]
+        &["-Sy", "--noconfirm", "--needed"]
     };
 
-    let cmd_preview = format!("$ pkexec {} {}", base_args.join(" "), targets.join(" "));
+    let cmd_preview = format!(
+        "$ pkexec pacman {} {}",
+        base_args.join(" "),
+        targets.join(" ")
+    );
 
     let _ = ui_tx
         .send(UiEvent::InstallProgress {
@@ -807,6 +943,7 @@ pub async fn install_packages_streaming(
     let mut child = Command::new("pkexec")
         .env("LC_ALL", "C")
         .stdin(Stdio::null())
+        .args(["sh", "-c", PACMAN_UNLOCK_AND_EXEC_SCRIPT, "--"])
         .args(base_args)
         .args(targets)
         .stdout(Stdio::piped())
@@ -938,6 +1075,8 @@ pub async fn update_pacman_all_streaming(
         )));
     }
 
+    wait_for_active_pacman(ui_tx).await;
+
     let _ = ui_tx
         .send(UiEvent::InstallProgress {
             phase: String::from(
@@ -952,7 +1091,14 @@ pub async fn update_pacman_all_streaming(
     let mut child = Command::new("pkexec")
         .env("LC_ALL", "C")
         .stdin(Stdio::null())
-        .args(["pacman", "-Syu", "--noconfirm"])
+        .args([
+            "sh",
+            "-c",
+            PACMAN_UNLOCK_AND_EXEC_SCRIPT,
+            "--",
+            "-Syu",
+            "--noconfirm",
+        ])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()?;

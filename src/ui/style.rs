@@ -80,17 +80,26 @@ pub const APP_CSS: &str = r#"
     background-color: alpha(@window_fg_color, 0.06);
 }
 
-.aur-table-header-row {
-    min-height: 34px;
+row.aur-table-header-row {
+    min-height: 24px;
+    padding-top: 2px;
+    padding-bottom: 2px;
     background-color: alpha(@window_fg_color, 0.04);
 }
 
 .aur-col-header-label {
-    font-size: 0.75em;
+    font-size: 0.74em;
     font-weight: 800;
     letter-spacing: 0.04em;
-    opacity: 0.72;
-    padding: 4px 0px;
+    opacity: 0.75;
+    padding: 1px 0px;
+}
+
+row.aur-pagination-row {
+    min-height: 36px;
+    padding-top: 4px;
+    padding-bottom: 4px;
+    background-color: alpha(@window_fg_color, 0.025);
 }
 
 .aur-col-cell {
