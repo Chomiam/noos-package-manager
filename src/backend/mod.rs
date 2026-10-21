@@ -19,6 +19,9 @@ use crate::backend::models::{
 use crate::error::AppResult;
 use crate::ui::messages::UiEvent;
 
+pub const SELF_PACKAGE_NAME: &str = "noos-package-manager";
+pub const SELF_PACKAGE_VERSION: &str = env!("CARGO_PKG_VERSION");
+
 #[derive(Debug, Clone)]
 pub struct CatalogSnapshot {
     pub packages: Vec<PackageItem>,
@@ -103,11 +106,35 @@ pub async fn load_system_catalog_with_options(force_sync: bool) -> AppResult<Cat
     let foreign_set = pacman::list_foreign_package_names()
         .await
         .unwrap_or_default();
-    let foreign_installed_versions: HashMap<String, String> = all_installed_versions
+    let mut foreign_installed_versions: HashMap<String, String> = all_installed_versions
         .iter()
         .filter(|(name, _)| foreign_set.contains(*name))
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
+
+    // Garantit que notre propre programme (`noos-package-manager`) est toujours reconnu comme installé
+    // avec sa version courante d'exécution afin que toute mise à jour disponible sur l'AUR soit détectée.
+    let self_running_ver = format!("{SELF_PACKAGE_VERSION}-1");
+    let self_effective_ver = all_installed_versions
+        .get(SELF_PACKAGE_NAME)
+        .cloned()
+        .unwrap_or(self_running_ver);
+    foreign_installed_versions.insert(SELF_PACKAGE_NAME.to_string(), self_effective_ver.clone());
+
+    if !installed_packages.iter().any(|p| p.name == SELF_PACKAGE_NAME) {
+        installed_packages.push(PackageItem {
+            id: format!("aur:{SELF_PACKAGE_NAME}"),
+            name: SELF_PACKAGE_NAME.to_string(),
+            version: self_effective_ver,
+            description: String::from(
+                "Gestionnaire de paquets GTK4/Libadwaita (Pacman, AUR, Flatpak et AppImages)",
+            ),
+            source: PackageSource::Aur,
+            is_installed: true,
+            update_available: None,
+            aur_meta: None,
+        });
+    }
 
     let already_in_catalog: HashSet<String> = installed_packages
         .iter()
@@ -263,11 +290,16 @@ pub async fn search_all_sources(query: &str) -> AppResult<(Vec<PackageItem>, Vec
     let foreign_set = pacman::list_foreign_package_names()
         .await
         .unwrap_or_default();
-    let foreign_installed_versions: HashMap<String, String> = installed_versions
+    let mut foreign_installed_versions: HashMap<String, String> = installed_versions
         .iter()
         .filter(|(name, _)| foreign_set.contains(*name))
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
+    let self_effective_ver = installed_versions
+        .get(SELF_PACKAGE_NAME)
+        .cloned()
+        .unwrap_or_else(|| format!("{SELF_PACKAGE_VERSION}-1"));
+    foreign_installed_versions.insert(SELF_PACKAGE_NAME.to_string(), self_effective_ver);
 
     let pacman_fut = pacman::search_packages(&trimmed, &updates_simple);
     let aur_fut = async {
@@ -853,6 +885,10 @@ pub async fn install_batch_with_progress(
         }
     }
 
+    if target_names.iter().any(|n| n == SELF_PACKAGE_NAME) {
+        sync_self_installed_binaries();
+    }
+
     let final_msg = if summary_messages.is_empty() {
         String::from("Installation terminée et vérifiée avec succès.")
     } else {
@@ -866,6 +902,54 @@ pub async fn install_batch_with_progress(
             installed_ids,
         })
         .await;
+}
+
+/// Synchronise de façon atomique le binaire `/usr/bin/noos-package-manager` (installé par Pacman/AUR)
+/// avec `~/.cargo/bin/noos-package-manager` et `~/.local/bin/noos-package-manager` afin que le
+/// redémarrage automatique lance toujours la nouvelle version fraîchement installée.
+pub fn sync_self_installed_binaries() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let usr_bin = PathBuf::from("/usr/bin/noos-package-manager");
+    if !usr_bin.is_file() {
+        return;
+    }
+
+    let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
+        return;
+    };
+
+    for rel_dir in [".cargo/bin", ".local/bin"] {
+        let dir = home.join(rel_dir);
+        let dest = dir.join(SELF_PACKAGE_NAME);
+        if dest.exists() {
+            let tmp_dest = dir.join(".noos-package-manager.new");
+            if std::fs::copy(&usr_bin, &tmp_dest).is_ok() {
+                if let Ok(meta) = std::fs::metadata(&tmp_dest) {
+                    let mut perms = meta.permissions();
+                    perms.set_mode(0o755);
+                    let _ = std::fs::set_permissions(&tmp_dest, perms);
+                }
+                let _ = std::fs::rename(&tmp_dest, &dest);
+            }
+        }
+    }
+
+    let desktop_path = home.join(".local/share/applications/noos-package-manager.desktop");
+    if let Ok(content) = std::fs::read_to_string(&desktop_path) {
+        let updated: String = content
+            .lines()
+            .map(|line| {
+                if line.starts_with("Exec=") {
+                    "Exec=noos-package-manager"
+                } else {
+                    line
+                }
+            })
+            .collect::<Vec<&str>>()
+            .join("\n");
+        let _ = std::fs::write(&desktop_path, format!("{updated}\n"));
+    }
 }
 
 /// Exécute la mise à jour globale de tous les paquets système (Pacman via `pkexec pacman -Syu`),
@@ -1094,6 +1178,13 @@ pub async fn update_all_system_and_aur_with_progress(
                     .await;
             }
         }
+    }
+
+    if updated_ids
+        .iter()
+        .any(|id| id == "aur:noos-package-manager" || id == "pacman:noos-package-manager")
+    {
+        sync_self_installed_binaries();
     }
 
     let final_msg = if summaries.is_empty() {

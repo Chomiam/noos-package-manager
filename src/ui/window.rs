@@ -860,13 +860,39 @@ pub fn build_main_window(app: &adw::Application) -> adw::ApplicationWindow {
                                 &tx_ui,
                             );
 
-                            let toast = adw::Toast::builder()
-                                .title(&message)
-                                .timeout(4)
-                                .build();
-                            toast_ui.add_toast(toast);
+                            let self_was_updated = installed_ids.iter().any(|id| {
+                                id == "aur:noos-package-manager"
+                                    || id == "pacman:noos-package-manager"
+                                    || id == backend::SELF_PACKAGE_NAME
+                            });
 
-                            let _ = tx_ui.send(BackendCommand::RefreshCatalog);
+                            if self_was_updated {
+                                let restart_msg = format!(
+                                    "{message} — Redémarrage automatique avec la nouvelle version…"
+                                );
+                                install_mgr_ui.on_install_finished(true, &restart_msg);
+                                let toast = adw::Toast::builder()
+                                    .title(&restart_msg)
+                                    .timeout(4)
+                                    .build();
+                                toast_ui.add_toast(toast);
+
+                                let win_restart = win_for_shots.clone();
+                                glib::timeout_add_local_once(
+                                    Duration::from_millis(1200),
+                                    move || {
+                                        relaunch_self_application(&win_restart);
+                                    },
+                                );
+                            } else {
+                                let toast = adw::Toast::builder()
+                                    .title(&message)
+                                    .timeout(4)
+                                    .build();
+                                toast_ui.add_toast(toast);
+
+                                let _ = tx_ui.send(BackendCommand::RefreshCatalog);
+                            }
                         } else {
                             update_selection_buttons(&state_ui, &actions_ui);
                             banner_ui.set_title(&message);
@@ -990,6 +1016,30 @@ fn maybe_schedule_automated_screenshots(
     glib::timeout_add_local_once(Duration::from_millis(3600), move || {
         win_close.close();
     });
+}
+
+fn relaunch_self_application(window: &adw::ApplicationWindow) {
+    let usr_bin = std::path::PathBuf::from("/usr/bin/noos-package-manager");
+    let cargo_bin = std::env::var_os("HOME")
+        .map(std::path::PathBuf::from)
+        .map(|h| h.join(".cargo/bin/noos-package-manager"));
+
+    let target_exe = if usr_bin.is_file() {
+        usr_bin
+    } else if let Some(cb) = cargo_bin.filter(|p| p.is_file()) {
+        cb
+    } else {
+        std::env::current_exe()
+            .unwrap_or_else(|_| std::path::PathBuf::from("noos-package-manager"))
+    };
+
+    let _ = std::process::Command::new(target_exe)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
+
+    window.destroy();
 }
 
 fn widen_preferences_page_clamp(widget: &gtk4::Widget) {
