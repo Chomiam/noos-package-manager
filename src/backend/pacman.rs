@@ -576,20 +576,34 @@ pub async fn ensure_stale_db_lock_removed(ui_tx: &async_channel::Sender<UiEvent>
     }
 }
 
-async fn clean_stale_checkupdates_lock() {
+async fn prepare_checkupdates_db(force_sync: bool) {
     if let Some(db_dir) = find_checkupdates_db_dir() {
-        let lock_file = db_dir.join("db.lck");
-        if lock_file.exists() {
-            let checkup_running = Command::new("pgrep")
-                .args(["-x", "checkupdates"])
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status()
-                .await
-                .map(|s| s.success())
-                .unwrap_or(false);
-            if !checkup_running {
+        let checkup_running = Command::new("pgrep")
+            .args(["-x", "checkupdates"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .await
+            .map(|s| s.success())
+            .unwrap_or(false);
+
+        if !checkup_running {
+            let lock_file = db_dir.join("db.lck");
+            if lock_file.exists() {
                 let _ = std::fs::remove_file(lock_file);
+            }
+            if force_sync {
+                let sync_dir = db_dir.join("sync");
+                if let Ok(entries) = std::fs::read_dir(&sync_dir) {
+                    for entry in entries.flatten() {
+                        let p = entry.path();
+                        if p.is_dir() {
+                            let _ = std::fs::remove_dir_all(&p);
+                        } else {
+                            let _ = std::fs::remove_file(&p);
+                        }
+                    }
+                }
             }
         }
     }
@@ -598,7 +612,15 @@ async fn clean_stale_checkupdates_lock() {
 /// Détecte les mises à jour disponibles via `checkupdates` (avec repli sur `pacman -Qu`).
 /// Renvoie une table `nom_du_paquet -> (ancienne_version, nouvelle_version)`.
 pub async fn check_updates_map() -> AppResult<HashMap<String, (String, String)>> {
-    clean_stale_checkupdates_lock().await;
+    check_updates_map_with_mode(false).await
+}
+
+/// Détecte les mises à jour disponibles via `checkupdates` en forçant optionnellement
+/// le re-téléchargement complet des bases de données de dépôts distants (`force_sync = true`).
+pub async fn check_updates_map_with_mode(
+    force_sync: bool,
+) -> AppResult<HashMap<String, (String, String)>> {
+    prepare_checkupdates_db(force_sync).await;
 
     let checkupdates_res = Command::new("checkupdates")
         .env("LC_ALL", "C")

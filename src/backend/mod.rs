@@ -33,11 +33,18 @@ pub struct CatalogSnapshot {
 /// triées par catégories, les mises à jour disponibles (`checkupdates` + AUR RPC v5 `info`)
 /// ainsi que les AppImages locales.
 pub async fn load_system_catalog() -> AppResult<CatalogSnapshot> {
+    load_system_catalog_with_options(false).await
+}
+
+/// Charge l'état complet du catalogue avec option de synchronisation forcée des bases distantes (`force_sync`).
+pub async fn load_system_catalog_with_options(force_sync: bool) -> AppResult<CatalogSnapshot> {
     let mut warnings = Vec::new();
     let aur_helper = aur::detect_aur_helper();
 
-    let (pacman_upd_res, aur_upd_res) =
-        tokio::join!(pacman::check_updates_map(), aur::check_aur_updates_via_helper());
+    let (pacman_upd_res, aur_upd_res) = tokio::join!(
+        pacman::check_updates_map_with_mode(force_sync),
+        aur::check_aur_updates_via_helper()
+    );
 
     let mut updates_full = match pacman_upd_res {
         Ok(map) => map,

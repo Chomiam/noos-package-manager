@@ -52,10 +52,13 @@ struct CategoryBadgeWidgets {
 
 #[derive(Clone)]
 struct HeaderActionButtons {
+    refresh_btn: gtk4::Button,
     batch_install_btn: gtk4::Button,
     clear_selection_btn: gtk4::Button,
     update_all_btn: gtk4::Button,
     aur_sort_box: gtk4::Box,
+    loading_status_page: adw::StatusPage,
+    empty_check_updates_btn: gtk4::Button,
     details_dialog: PackageDetailsDialog,
 }
 
@@ -241,10 +244,20 @@ pub fn build_main_window(app: &adw::Application) -> adw::ApplicationWindow {
     widen_preferences_page_clamp(preferences_page.upcast_ref::<gtk4::Widget>());
     content_stack.add_named(&preferences_page, Some("list"));
 
+    let empty_check_updates_btn = gtk4::Button::builder()
+        .label("Vérifier les mises à jour")
+        .icon_name("view-refresh-symbolic")
+        .halign(gtk4::Align::Center)
+        .visible(false)
+        .css_classes(["suggested-action", "pill"])
+        .tooltip_text("Synchroniser les dépôts Pacman, l'API AUR, Flathub et GitHub Releases")
+        .build();
+
     let empty_status_page = adw::StatusPage::builder()
         .icon_name("system-search-symbolic")
         .title("Aucun paquet à afficher")
         .description("Modifiez votre recherche ou sélectionnez une autre catégorie.")
+        .child(&empty_check_updates_btn)
         .vexpand(true)
         .build();
     content_stack.add_named(&empty_status_page, Some("empty"));
@@ -343,10 +356,13 @@ pub fn build_main_window(app: &adw::Application) -> adw::ApplicationWindow {
     });
 
     let header_actions = HeaderActionButtons {
+        refresh_btn: refresh_btn.clone(),
         batch_install_btn: batch_install_btn.clone(),
         clear_selection_btn: clear_selection_btn.clone(),
         update_all_btn: update_all_btn.clone(),
         aur_sort_box: aur_sort_box.clone(),
+        loading_status_page: loading_status_page.clone(),
+        empty_check_updates_btn: empty_check_updates_btn.clone(),
         details_dialog,
     };
 
@@ -538,19 +554,44 @@ pub fn build_main_window(app: &adw::Application) -> adw::ApplicationWindow {
         });
     }
 
-    // --- Connexion du bouton de rafraîchissement ---
+    // --- Connexion du bouton de rafraîchissement / vérification des mises à jour ---
     {
         let tx_refresh = cmd_tx.clone();
         let search_ref = search_entry.clone();
-        refresh_btn.connect_clicked(move |_| {
+        let stack_ref = content_stack.clone();
+        let loading_ref = loading_status_page.clone();
+        refresh_btn.connect_clicked(move |btn| {
             let current_query = search_ref.text().trim().to_string();
             if current_query.is_empty() {
-                let _ = tx_refresh.send(BackendCommand::RefreshCatalog);
+                btn.set_sensitive(false);
+                loading_ref.set_title("Vérification des mises à jour en cours…");
+                loading_ref.set_description(Some(
+                    "Synchronisation forcée des bases Pacman (checkupdates), de l'API AUR RPC v5 (yay/paru), de Flathub et des AppImages…",
+                ));
+                stack_ref.set_visible_child_name("loading");
+                let _ = tx_refresh.send(BackendCommand::CheckAllUpdates);
             } else {
                 let _ = tx_refresh.send(BackendCommand::Search {
                     query: current_query,
                 });
             }
+        });
+    }
+
+    // --- Connexion du bouton "Vérifier les mises à jour" sur la page "Système entièrement à jour" ---
+    {
+        let tx_chk_empty = cmd_tx.clone();
+        let stack_ref = content_stack.clone();
+        let loading_ref = loading_status_page.clone();
+        let refresh_ref = refresh_btn.clone();
+        empty_check_updates_btn.connect_clicked(move |_| {
+            refresh_ref.set_sensitive(false);
+            loading_ref.set_title("Vérification des mises à jour en cours…");
+            loading_ref.set_description(Some(
+                "Synchronisation forcée des bases Pacman (checkupdates), de l'API AUR RPC v5 (yay/paru), de Flathub et des AppImages…",
+            ));
+            stack_ref.set_visible_child_name("loading");
+            let _ = tx_chk_empty.send(BackendCommand::CheckAllUpdates);
         });
     }
 
@@ -599,6 +640,7 @@ pub fn build_main_window(app: &adw::Application) -> adw::ApplicationWindow {
                     UiEvent::CatalogLoaded(snapshot) => {
                         spinner_ui.set_spinning(false);
                         spinner_ui.set_visible(false);
+                        actions_ui.refresh_btn.set_sensitive(true);
                         actions_ui.update_all_btn.set_sensitive(true);
 
                         if !snapshot.non_fatal_warnings.is_empty() {
@@ -630,6 +672,49 @@ pub fn build_main_window(app: &adw::Application) -> adw::ApplicationWindow {
                         );
 
                         maybe_schedule_automated_screenshots(&win_for_shots, &sidebar_for_shots);
+                    }
+                    UiEvent::UpdatesChecked {
+                        snapshot,
+                        summary_toast,
+                    } => {
+                        spinner_ui.set_spinning(false);
+                        spinner_ui.set_visible(false);
+                        actions_ui.refresh_btn.set_sensitive(true);
+                        actions_ui.update_all_btn.set_sensitive(true);
+
+                        if !snapshot.non_fatal_warnings.is_empty() {
+                            let joined = snapshot.non_fatal_warnings.join(" · ");
+                            banner_ui.set_title(&joined);
+                            banner_ui.set_revealed(true);
+                        } else {
+                            banner_ui.set_revealed(false);
+                        }
+
+                        {
+                            let mut st = state_ui.borrow_mut();
+                            st.catalog_packages = snapshot.packages;
+                            st.recommendations = snapshot.recommendations;
+                            st.flatpak_recommendations = snapshot.flatpak_recommendations;
+                            st.updates_count = snapshot.updates_count;
+                            st.aur_helper = snapshot.aur_helper;
+                        }
+
+                        update_selection_buttons(&state_ui, &actions_ui);
+                        rebuild_package_list_ui(
+                            &state_ui,
+                            &prefs_page,
+                            &stack,
+                            &empty_page,
+                            &badges_ui,
+                            &actions_ui,
+                            &tx_ui,
+                        );
+
+                        let toast = adw::Toast::builder()
+                            .title(&summary_toast)
+                            .timeout(4)
+                            .build();
+                        toast_ui.add_toast(toast);
                     }
                     UiEvent::SearchCompleted {
                         query,
@@ -803,6 +888,7 @@ pub fn build_main_window(app: &adw::Application) -> adw::ApplicationWindow {
                     } => {
                         spinner_ui.set_spinning(false);
                         spinner_ui.set_visible(false);
+                        actions_ui.refresh_btn.set_sensitive(true);
                         actions_ui.update_all_btn.set_sensitive(true);
 
                         let toast = adw::Toast::builder()
@@ -818,6 +904,7 @@ pub fn build_main_window(app: &adw::Application) -> adw::ApplicationWindow {
                     UiEvent::OperationError { title, detail } => {
                         spinner_ui.set_spinning(false);
                         spinner_ui.set_visible(false);
+                        actions_ui.refresh_btn.set_sensitive(true);
                         actions_ui.update_all_btn.set_sensitive(true);
                         update_selection_buttons(&state_ui, &actions_ui);
 
@@ -1390,10 +1477,16 @@ fn rebuild_package_list_ui(
             .build();
         {
             let tx_chk = cmd_tx.clone();
+            let stack_chk = stack.clone();
+            let loading_chk = actions.loading_status_page.clone();
             check_upd_btn.connect_clicked(move |btn| {
                 btn.set_sensitive(false);
+                loading_chk.set_title("Vérification des mises à jour AppImages…");
+                loading_chk.set_description(Some(
+                    "Interrogation de GitHub Releases et synchronisation du catalogue…",
+                ));
+                stack_chk.set_visible_child_name("loading");
                 let _ = tx_chk.send(BackendCommand::CheckAppImageUpdates);
-                btn.set_sensitive(true);
             });
         }
 
@@ -1429,7 +1522,7 @@ fn rebuild_package_list_ui(
     }
 
     if filtered_items.is_empty() {
-        configure_empty_status_page(empty_status_page, category, &active_query);
+        configure_empty_status_page(empty_status_page, category, &active_query, actions);
         stack.set_visible_child_name("empty");
         return;
     }
@@ -2021,8 +2114,10 @@ fn configure_empty_status_page(
     status_page: &adw::StatusPage,
     category: SidebarCategory,
     active_query: &str,
+    actions: &HeaderActionButtons,
 ) {
     if !active_query.is_empty() {
+        actions.empty_check_updates_btn.set_visible(false);
         status_page.set_icon_name(Some("system-search-symbolic"));
         status_page.set_title("Aucun résultat trouvé");
         status_page.set_description(Some(&format!(
@@ -2032,12 +2127,16 @@ fn configure_empty_status_page(
         return;
     }
 
+    actions
+        .empty_check_updates_btn
+        .set_visible(matches!(category, SidebarCategory::Updates));
+
     match category {
         SidebarCategory::Updates => {
             status_page.set_icon_name(Some("object-select-symbolic"));
             status_page.set_title("Système entièrement à jour");
             status_page.set_description(Some(
-                "Aucune mise à jour en attente pour vos paquets Pacman ou AUR.",
+                "Aucune mise à jour en attente pour vos paquets Pacman, AUR, Flatpak ou AppImages.",
             ));
         }
         SidebarCategory::AppImages => {
@@ -2116,6 +2215,44 @@ async fn handle_backend_command(
                     let _ = ui_tx
                         .send(UiEvent::OperationError {
                             title: String::from("Échec du chargement du catalogue"),
+                            detail: err.to_string(),
+                        })
+                        .await;
+                }
+            }
+        }
+        BackendCommand::CheckAllUpdates => {
+            let _ = ui_tx
+                .send(UiEvent::LoadingStarted {
+                    message: String::from(
+                        "Vérification complète des mises à jour (Pacman, AUR, Flatpak, AppImages)…",
+                    ),
+                })
+                .await;
+
+            match backend::load_system_catalog_with_options(true).await {
+                Ok(snapshot) => {
+                    let summary_toast = if snapshot.updates_count > 0 {
+                        format!(
+                            "Vérification terminée : {} mise(s) à jour disponible(s).",
+                            snapshot.updates_count
+                        )
+                    } else {
+                        String::from(
+                            "Vérification terminée : tous vos paquets (Pacman, AUR, Flatpak, AppImages) sont à jour.",
+                        )
+                    };
+                    let _ = ui_tx
+                        .send(UiEvent::UpdatesChecked {
+                            snapshot,
+                            summary_toast,
+                        })
+                        .await;
+                }
+                Err(err) => {
+                    let _ = ui_tx
+                        .send(UiEvent::OperationError {
+                            title: String::from("Échec de la vérification des mises à jour"),
                             detail: err.to_string(),
                         })
                         .await;
@@ -2351,12 +2488,22 @@ async fn handle_backend_command(
                 .and_then(|r| r.ok())
                 .unwrap_or_default();
 
-            let updates = backend::appimage::check_appimage_updates(&scanned).await;
-            let count = updates.len();
-            let msg = if count > 0 {
-                format!("{count} mise(s) à jour d'AppImage détectée(s) sur GitHub Releases.")
+            let msg = if scanned.is_empty() {
+                tokio::time::sleep(Duration::from_millis(600)).await;
+                String::from(
+                    "Aucune AppImage n'est installée dans ~/Applications (0 fichier à vérifier).",
+                )
             } else {
-                String::from("Toutes vos AppImages sont à jour.")
+                let updates = backend::appimage::check_appimage_updates(&scanned).await;
+                let count = updates.len();
+                if count > 0 {
+                    format!("{count} mise(s) à jour d'AppImage détectée(s) sur GitHub Releases.")
+                } else {
+                    format!(
+                        "Vérification terminée : vos {} AppImage(s) sont à jour.",
+                        scanned.len()
+                    )
+                }
             };
 
             let _ = ui_tx

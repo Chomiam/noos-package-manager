@@ -7,6 +7,7 @@ use crate::backend::CatalogSnapshot;
 #[derive(Debug, Clone)]
 pub enum BackendCommand {
     RefreshCatalog,
+    CheckAllUpdates,
     Search {
         query: String,
     },
@@ -57,6 +58,10 @@ pub enum UiEvent {
         message: String,
     },
     CatalogLoaded(CatalogSnapshot),
+    UpdatesChecked {
+        snapshot: CatalogSnapshot,
+        summary_toast: String,
+    },
     SearchCompleted {
         query: String,
         results: Vec<PackageItem>,
