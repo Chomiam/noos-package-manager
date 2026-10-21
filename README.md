@@ -2,7 +2,7 @@
 
 **Noos Package Manager** est un gestionnaire de paquets graphique moderne et unifié pour **Arch Linux**, écrit intégralement en **Rust** avec **GTK4** et **Libadwaita**.
 
-Il réunit au sein d'une seule interface fluide (compatible avec les thèmes GNOME et WhiteSur) les **dépôts officiels Pacman**, l'**Arch User Repository (AUR RPC v5 + `yay`/`paru`)**, les applications **Flatpak / Flathub** ainsi que la gestion locale complète des **AppImages**.
+Il réunit au sein d'une seule interface fluide (compatible avec les thèmes GNOME et WhiteSur) les **dépôts officiels Pacman**, l'**Arch User Repository (AUR RPC v5 + `yay`)**, les applications **Flatpak / Flathub** ainsi que la gestion locale complète des **AppImages**, et inclut l'outil en ligne de commande **`noos-up`** propulsé par **Ratatui**.
 
 ---
 
@@ -30,7 +30,7 @@ Il réunit au sein d'une seule interface fluide (compatible avec les thèmes GNO
 - **Dépôts officiels Pacman (`pacman` & `checkupdates`)** :
   - Recommandations organisées par catégories (*Navigateurs & Internet*, *Multimédia, Audio & Création*, *Bureautique & Productivité*, *Développement & Programmation*, *Jeux & Gaming*, *Système & Utilitaires*) avec les paquets non installés présentés en priorité.
   - Résolution automatique des logos d'applications (WhiteSur, hicolor, breeze, Flathub appstream, `.desktop`).
-- **Arch User Repository — AUR (`RPC v5` + `yay` / `paru`)** :
+- **Arch User Repository — AUR (`RPC v5` + `yay`)** :
   - Affichage tabulaire aligné en colonnes : **Votes (`★`)**, **Popularité**, **Mainteneur** (avec détection des paquets orphelins), **Date de dernière mise à jour**, **Version** et badge d'alerte **Obsolète (`Out-of-Date`)**.
   - Sélecteur de tri dédié dans l'onglet AUR : *Popularité (par défaut)*, *Votes*, *Mis à jour récemment* et *Nom (A → Z)*.
 - **Flatpak & Flathub (`flatpak` + API Flathub v2)** :
@@ -45,8 +45,10 @@ Il réunit au sein d'une seule interface fluide (compatible avec les thèmes GNO
   - **Gestionnaire d'installation** dédié affichant la résolution des dépendances, la taille totale de téléchargement, la barre de progression en direct, l'état individuel de chaque dépendance, les journaux console, un bouton **Annuler l'installation** avec confirmation, ainsi qu'une alerte de sécurité si l'utilisateur tente de fermer l'application pendant une transaction.
 - **Mises à jour globales unifiées, Cache local & Auto-redémarrage** :
   - **Cache local instantané & Différentiel incrémental** : démarrage immédiat depuis `~/.cache/noos-package-manager/catalog_cache_v1.json`, calcul uniquement des différences locales (`pacman -Q` / `-Qqe` / `-Qqm`) et actualisation asynchrone des mises à jour en arrière-plan.
-  - Vérification simultanée et affichage par sections dédiées (**Pacman**, **AUR**, **Flatpak**, **AppImages**) des mises à jour disponibles (`checkupdates`, `yay -Qua` / `paru -Qua`, `flatpak remote-ls --updates`, GitHub Releases).
+  - Vérification simultanée et affichage par sections dédiées (**Pacman**, **AUR**, **Flatpak**, **AppImages**) des mises à jour disponibles (`checkupdates`, `yay -Qua`, `flatpak remote-ls --updates`, GitHub Releases).
   - Détection automatique des mises à jour AUR de `noos-package-manager` lui-même avec synchronisation atomique des binaires et **redémarrage automatique** de l'application une fois sa mise à jour appliquée.
+- **Commande CLI `noos-up` (Ratatui)** :
+  - Utilitaire en ligne de commande avec interface **Ratatui** (`Viewport::Inline`) permettant de vérifier (`noos-up --check`) et d'appliquer (`noos-up`) en une seule commande toutes les mises à jour **Pacman**, **Yay (AUR)** et **Flatpak** avec badges colorés, barre de progression et flux temps réel.
 - **Fiches détaillées & README intégrés** :
   - Bouton d'information `ℹ` sur chaque paquet ouvrant une fenêtre contextuelle avec métadonnées complètes, liens directs vers le **Site officiel** et **GitHub**, et rendu natif du **README** (GitHub / GitLab / Flathub / documentation locale).
 
@@ -61,16 +63,23 @@ Avec `yay` :
 yay -S noos-package-manager
 ```
 
-Avec `paru` :
-```bash
-paru -S noos-package-manager
-```
-
 Manuellement avec `makepkg` :
 ```bash
 git clone https://aur.archlinux.org/noos-package-manager.git
 cd noos-package-manager
 makepkg -si
+```
+
+### Utilisation en ligne de commande (`noos-up`)
+
+Mettre à jour tous les paquets **Pacman**, **Yay (AUR)** et **Flatpak** avec l'interface CLI stylisée **Ratatui** :
+```bash
+noos-up
+```
+
+Vérifier uniquement les mises à jour disponibles sans les installer :
+```bash
+noos-up --check
 ```
 
 ### Compilation depuis les sources

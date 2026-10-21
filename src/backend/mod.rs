@@ -1345,33 +1345,35 @@ pub async fn install_batch_with_progress(
         .await;
 }
 
-/// Synchronise de façon atomique le binaire `/usr/bin/noos-package-manager` (installé par Pacman/AUR)
-/// avec `~/.cargo/bin/noos-package-manager` et `~/.local/bin/noos-package-manager` afin que le
-/// redémarrage automatique lance toujours la nouvelle version fraîchement installée.
+/// Synchronise de façon atomique les binaires `/usr/bin/noos-package-manager` et `/usr/bin/noos-up`
+/// avec `~/.cargo/bin/` et `~/.local/bin/` afin que le redémarrage automatique et le CLI lancent
+/// toujours la nouvelle version fraîchement installée.
 pub fn sync_self_installed_binaries() {
     use std::os::unix::fs::PermissionsExt;
-
-    let usr_bin = PathBuf::from("/usr/bin/noos-package-manager");
-    if !usr_bin.is_file() {
-        return;
-    }
 
     let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
         return;
     };
 
-    for rel_dir in [".cargo/bin", ".local/bin"] {
-        let dir = home.join(rel_dir);
-        let dest = dir.join(SELF_PACKAGE_NAME);
-        if dest.exists() {
-            let tmp_dest = dir.join(".noos-package-manager.new");
-            if std::fs::copy(&usr_bin, &tmp_dest).is_ok() {
-                if let Ok(meta) = std::fs::metadata(&tmp_dest) {
-                    let mut perms = meta.permissions();
-                    perms.set_mode(0o755);
-                    let _ = std::fs::set_permissions(&tmp_dest, perms);
+    for bin_name in [SELF_PACKAGE_NAME, "noos-up"] {
+        let usr_bin = PathBuf::from(format!("/usr/bin/{bin_name}"));
+        if !usr_bin.is_file() {
+            continue;
+        }
+
+        for rel_dir in [".cargo/bin", ".local/bin"] {
+            let dir = home.join(rel_dir);
+            let dest = dir.join(bin_name);
+            if dest.exists() {
+                let tmp_dest = dir.join(format!(".{bin_name}.new"));
+                if std::fs::copy(&usr_bin, &tmp_dest).is_ok() {
+                    if let Ok(meta) = std::fs::metadata(&tmp_dest) {
+                        let mut perms = meta.permissions();
+                        perms.set_mode(0o755);
+                        let _ = std::fs::set_permissions(&tmp_dest, perms);
+                    }
+                    let _ = std::fs::rename(&tmp_dest, &dest);
                 }
-                let _ = std::fs::rename(&tmp_dest, &dest);
             }
         }
     }
