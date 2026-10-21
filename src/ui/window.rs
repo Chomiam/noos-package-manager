@@ -1446,24 +1446,25 @@ fn rebuild_package_list_ui(
                     return false;
                 }
                 if is_local_filter {
-                    return pkg.name.to_lowercase().contains(&q_low)
-                        || pkg.description.to_lowercase().contains(&q_low);
+                    return pkg.matches_search_query(&q_low);
                 }
                 true
             })
             .cloned()
             .collect();
 
-        if matches!(cat, SidebarCategory::Pacman | SidebarCategory::Flatpak) {
+        if matches!(cat, SidebarCategory::Aur) {
+            let sort_mode = st.aur_sort_mode;
+            items.sort_by(|a, b| sort_mode.compare_items(a, b));
+        } else if !q_low.is_empty() {
+            items.sort_by(|a, b| a.compare_search_relevance(b, &q_low));
+        } else if matches!(cat, SidebarCategory::Pacman | SidebarCategory::Flatpak) {
             items.sort_by(|a, b| {
                 a.is_installed
                     .cmp(&b.is_installed)
                     .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
             });
-        } else if matches!(cat, SidebarCategory::Aur) {
-            let sort_mode = st.aur_sort_mode;
-            items.sort_by(|a, b| sort_mode.compare_items(a, b));
-        } else if matches!(cat, SidebarCategory::All) && !has_remote {
+        } else if matches!(cat, SidebarCategory::All) {
             items.sort_by_key(|a| a.name.to_lowercase());
         }
 

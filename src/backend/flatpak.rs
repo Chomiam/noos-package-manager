@@ -621,11 +621,23 @@ pub async fn search_flatpak(
     }
 
     let stdout = String::from_utf8(output.stdout)?;
-    Ok(parse_flatpak_search_output(
-        &stdout,
-        installed_map,
-        updates_map,
-    ))
+    let parsed = parse_flatpak_search_output(&stdout, installed_map, updates_map);
+
+    let q_low = trimmed.to_lowercase();
+    let filtered: Vec<PackageItem> = parsed
+        .iter()
+        .filter(|item| item.matches_search_query(&q_low))
+        .cloned()
+        .collect();
+
+    let mut final_items = if filtered.is_empty() {
+        parsed
+    } else {
+        filtered
+    };
+
+    final_items.sort_by(|a, b| a.compare_search_relevance(b, &q_low));
+    Ok(final_items)
 }
 
 /// Résout les moteurs d'exécution (Runtimes) et tailles de téléchargement pour un lot d'applications Flatpak.

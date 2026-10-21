@@ -160,6 +160,57 @@ impl PackageItem {
             result
         }
     }
+
+    /// Vérifie si tous les mots de la requête apparaissent dans le nom, l'identifiant ou le résumé du paquet.
+    pub fn matches_search_query(&self, query_lower: &str) -> bool {
+        let q = query_lower.trim();
+        if q.is_empty() {
+            return true;
+        }
+        let name_low = self.name.to_lowercase();
+        let id_low = self.id.to_lowercase();
+        let desc_low = self.description.to_lowercase();
+
+        q.split_whitespace()
+            .all(|token| name_low.contains(token) || id_low.contains(token) || desc_low.contains(token))
+    }
+
+    /// Calcule un rang de pertinence (`0` = plus pertinent, `5` = correspondance dans la description).
+    pub fn search_relevance_rank(&self, query_lower: &str) -> u8 {
+        let q = query_lower.trim();
+        if q.is_empty() {
+            return 5;
+        }
+        let name_low = self.name.to_lowercase();
+        let id_low = self.id.to_lowercase();
+        let id_short = id_low.split([':', '.']).next_back().unwrap_or(&id_low);
+
+        if name_low == q || id_short == q {
+            0
+        } else if name_low.starts_with(q) || id_short.starts_with(q) {
+            1
+        } else if name_low
+            .split(|c: char| !c.is_alphanumeric())
+            .any(|word| !word.is_empty() && word.starts_with(q))
+        {
+            2
+        } else if name_low.contains(q) {
+            3
+        } else if id_low.contains(q) {
+            4
+        } else {
+            5
+        }
+    }
+
+    /// Compare deux paquets par pertinence vis-à-vis d'une requête de recherche (`query_lower`).
+    pub fn compare_search_relevance(&self, other: &Self, query_lower: &str) -> Ordering {
+        let rank_a = self.search_relevance_rank(query_lower);
+        let rank_b = other.search_relevance_rank(query_lower);
+        rank_a
+            .cmp(&rank_b)
+            .then_with(|| self.name.to_lowercase().cmp(&other.name.to_lowercase()))
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]

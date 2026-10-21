@@ -622,5 +622,25 @@ Conflicts With  : None
         .iter()
         .all(|p| p.name != "old-removed-pkg"));
 
+    // Test de filtrage et tri par pertinence de la recherche Flatpak
+    let fp_noisy_raw = "\
+Boxflat\tConfigure Moza Racing hardware\tio.github.lawstorant.boxflat\tv1.37.1\tstable\tflathub
+ElectronMail\tUnofficial ProtonMail desktop app\tcom.github.vladimiry.ElectronMail\t5.3.10\tstable\tflathub
+PortProton\tRun Windows games on Linux easily\tru.linux_gaming.PortProton\t1.7.5\tstable\tflathub
+Proton Pass\tEncrypted password manager\tme.proton.Pass\t1.42.0\tstable\tflathub
+Proton VPN\tSecures your internet\tcom.protonvpn.www\t4.18.7\tstable\tflathub
+";
+    let fp_parsed = parse_flatpak_search_output(fp_noisy_raw, &HashMap::new(), &HashMap::new());
+    let mut fp_filtered: Vec<_> = fp_parsed
+        .into_iter()
+        .filter(|item| item.matches_search_query("proton"))
+        .collect();
+    fp_filtered.sort_by(|a, b| a.compare_search_relevance(b, "proton"));
+    assert_eq!(fp_filtered.len(), 4);
+    assert_eq!(fp_filtered[0].name, "Proton Pass");
+    assert_eq!(fp_filtered[1].name, "Proton VPN");
+    assert_eq!(fp_filtered[2].name, "PortProton");
+    assert_eq!(fp_filtered[3].name, "ElectronMail");
+
     Ok(())
 }

@@ -800,23 +800,9 @@ pub async fn search_all_sources(query: &str) -> AppResult<(Vec<PackageItem>, Vec
         Err(e) => warnings.push(format!("Tâche AppImage : {e}")),
     }
 
-    // Tri par pertinence sans mettre les paquets installés en tête :
-    // correspondance exacte, puis préfixe, puis non-installés avant installés, puis alphabétique.
+    // Tri par pertinence multi-critères (nom exact > préfixe du nom > mot commençant par la requête > nom contient > id contient > description contient)
     let q_low = trimmed.to_lowercase();
-    results.sort_by(|a, b| {
-        let a_low = a.name.to_lowercase();
-        let b_low = b.name.to_lowercase();
-        let a_exact = a_low == q_low;
-        let b_exact = b_low == q_low;
-        let a_prefix = a_low.starts_with(&q_low);
-        let b_prefix = b_low.starts_with(&q_low);
-
-        b_exact
-            .cmp(&a_exact)
-            .then_with(|| b_prefix.cmp(&a_prefix))
-            .then_with(|| a.is_installed.cmp(&b.is_installed))
-            .then_with(|| a_low.cmp(&b_low))
-    });
+    results.sort_by(|a, b| a.compare_search_relevance(b, &q_low));
 
     Ok((results, warnings))
 }
