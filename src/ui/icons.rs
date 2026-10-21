@@ -52,7 +52,7 @@ fn ensure_app_logo_and_desktop_installed() -> Option<PathBuf> {
              Icon={}\n\
              Terminal=false\n\
              Categories=System;PackageManager;GTK;GNOME;\n\
-             Keywords=pacman;aur;yay;paru;flatpak;flathub;appimage;arch;package;manager;noos;gestionnaire;paquets;\n\
+             Keywords=pacman;aur;yay;flatpak;flathub;appimage;arch;package;manager;noos;gestionnaire;paquets;\n\
              StartupNotify=true\n\
              StartupWMClass=org.noos.PackageManager\n",
             icon_path.display()

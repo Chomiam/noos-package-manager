@@ -392,21 +392,18 @@ impl RecommendationCategory {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AurHelper {
-    Paru,
     Yay,
 }
 
 impl AurHelper {
     pub fn binary_name(self) -> &'static str {
         match self {
-            Self::Paru => "paru",
             Self::Yay => "yay",
         }
     }
 
     pub fn display_name(self) -> &'static str {
         match self {
-            Self::Paru => "Paru",
             Self::Yay => "Yay",
         }
     }

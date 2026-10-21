@@ -11,7 +11,7 @@ pub enum AppError {
     #[error("Erreur API AUR : {0}")]
     AurApiError(String),
 
-    #[error("Aucun assistant AUR détecté (installez 'paru' ou 'yay')")]
+    #[error("Aucun assistant AUR détecté (installez 'yay')")]
     AurHelperNotFound,
 
     #[error("Erreur de l'assistant AUR : {0}")]

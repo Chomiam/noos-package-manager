@@ -41,73 +41,73 @@ fn test_aur_rpc_v5_search_json_parsing() -> TestResult {
         "results": [
             {
                 "ID": 1298412,
-                "Name": "paru",
+                "Name": "yay",
                 "PackageBaseID": 159044,
-                "PackageBase": "paru",
-                "Version": "2.0.4-1",
-                "Description": "Feature packed AUR helper",
-                "URL": "https://github.com/Morganamilo/paru",
+                "PackageBase": "yay",
+                "Version": "12.4.2-1",
+                "Description": "Yet another yogurt AUR helper",
+                "URL": "https://github.com/Jguer/yay",
                 "NumVotes": 982,
                 "Popularity": 18.45,
                 "OutOfDate": null,
-                "Maintainer": "Morganamilo",
+                "Maintainer": "Jguer",
                 "FirstSubmitted": 1603895664,
                 "LastModified": 1720000000,
-                "URLPath": "/cgit/aur.git/snapshot/paru.tar.gz"
+                "URLPath": "/cgit/aur.git/snapshot/yay.tar.gz"
             },
             {
                 "ID": 1300100,
-                "Name": "paru-bin",
+                "Name": "yay-bin",
                 "PackageBaseID": 159045,
-                "PackageBase": "paru-bin",
-                "Version": "2.0.4-1",
-                "Description": "Feature packed AUR helper (precompiled binary)",
-                "URL": "https://github.com/Morganamilo/paru",
+                "PackageBase": "yay-bin",
+                "Version": "12.4.2-1",
+                "Description": "Yet another yogurt AUR helper (precompiled binary)",
+                "URL": "https://github.com/Jguer/yay",
                 "NumVotes": 640,
                 "Popularity": 12.30,
                 "OutOfDate": null,
-                "Maintainer": "Morganamilo",
+                "Maintainer": "Jguer",
                 "FirstSubmitted": 1603895700,
                 "LastModified": 1720000100,
-                "URLPath": "/cgit/aur.git/snapshot/paru-bin.tar.gz"
+                "URLPath": "/cgit/aur.git/snapshot/yay-bin.tar.gz"
             }
         ]
     }"#;
 
     let mut installed = HashMap::new();
-    installed.insert(String::from("paru"), String::from("2.0.3-1"));
+    installed.insert(String::from("yay"), String::from("12.4.1-1"));
 
     let mut items = parse_aur_rpc_json(sample_json, &installed)?;
     assert_eq!(items.len(), 2);
 
-    let paru = &items[0];
-    assert_eq!(paru.name, "paru");
-    assert_eq!(paru.id, "aur:paru");
-    assert_eq!(paru.version, "2.0.3-1");
-    assert!(paru.is_installed);
-    assert_eq!(paru.update_available.as_deref(), Some("2.0.4-1"));
-    assert_eq!(paru.source, PackageSource::Aur);
-    assert!(paru.description.contains("Feature packed AUR helper"));
-    let meta = paru.aur_meta.as_ref().ok_or("aur_meta absent")?;
+    let yay = &items[0];
+    assert_eq!(yay.name, "yay");
+    assert_eq!(yay.id, "aur:yay");
+    assert_eq!(yay.version, "12.4.1-1");
+    assert!(yay.is_installed);
+    assert_eq!(yay.update_available.as_deref(), Some("12.4.2-1"));
+    assert_eq!(yay.source, PackageSource::Aur);
+    assert!(yay.description.contains("Yet another yogurt AUR helper"));
+    let meta = yay.aur_meta.as_ref().ok_or("aur_meta absent")?;
     assert_eq!(meta.votes, 982);
-    assert_eq!(meta.maintainer.as_deref(), Some("Morganamilo"));
+    assert_eq!(meta.maintainer.as_deref(), Some("Jguer"));
     assert_eq!(meta.last_modified, Some(1720000000));
     assert!(meta.out_of_date.is_none());
 
-    let paru_bin = &items[1];
-    assert_eq!(paru_bin.name, "paru-bin");
-    assert_eq!(paru_bin.version, "2.0.4-1");
-    assert!(!paru_bin.is_installed);
-    assert!(paru_bin.update_available.is_none());
-    assert_eq!(paru_bin.source, PackageSource::Aur);
+    let yay_bin = &items[1];
+    assert_eq!(yay_bin.name, "yay-bin");
+    assert_eq!(yay_bin.version, "12.4.2-1");
+    assert!(!yay_bin.is_installed);
+    assert!(yay_bin.update_available.is_none());
+    assert_eq!(yay_bin.source, PackageSource::Aur);
 
-    // Test du tri par "Mis à jour récemment" (paru-bin a LastModified 1720000100 > paru 1720000000)
+    // Test du tri par "Mis à jour récemment" (yay-bin a LastModified 1720000100 > yay 1720000000)
     items.sort_by(|a, b| AurSortMode::RecentlyUpdated.compare_items(a, b));
-    assert_eq!(items[0].name, "paru-bin");
+    assert_eq!(items[0].name, "yay-bin");
 
-    // Test du tri par Popularité (par défaut : paru 18.45 > paru-bin 12.30)
+    // Test du tri par Popularité (par défaut : yay 18.45 > yay-bin 12.30)
     items.sort_by(|a, b| AurSortMode::Popularity.compare_items(a, b));
-    assert_eq!(items[0].name, "paru");
+    assert_eq!(items[0].name, "yay");
 
     Ok(())
 }
@@ -166,8 +166,8 @@ fn test_aur_rpc_v5_info_and_error_json_parsing() -> TestResult {
         "https://aur.archlinux.org/rpc/v5/search/gtk4%20rust"
     );
     assert_eq!(
-        build_info_url(&["paru", "yay-bin"]),
-        "https://aur.archlinux.org/rpc/v5/info?arg[]=paru&arg[]=yay-bin"
+        build_info_url(&["yay", "yay-bin"]),
+        "https://aur.archlinux.org/rpc/v5/info?arg[]=yay&arg[]=yay-bin"
     );
 
     Ok(())
@@ -302,12 +302,12 @@ Name            : gtk4
 Version         : 1:4.16.2-1
 Description     : GObject-based multi-platform GUI toolkit
 
-Name            : paru
-Version         : 2.0.4-1
-Description     : Feature packed AUR helper
+Name            : yay
+Version         : 12.4.2-1
+Description     : Yet another yogurt AUR helper
 ";
     let mut foreign = HashSet::new();
-    foreign.insert(String::from("paru"));
+    foreign.insert(String::from("yay"));
     let mut simple_updates = HashMap::new();
     simple_updates.insert(String::from("gtk4"), String::from("1:4.16.3-1"));
 
@@ -319,7 +319,7 @@ Description     : Feature packed AUR helper
         qi_items[0].update_available.as_deref(),
         Some("1:4.16.3-1")
     );
-    assert_eq!(qi_items[1].name, "paru");
+    assert_eq!(qi_items[1].name, "yay");
     assert_eq!(qi_items[1].source, PackageSource::Aur);
 
     let raw_ss = "\
@@ -349,15 +349,6 @@ core/linux 6.11.5.arch1-1 [installed: 6.11.3.arch1-1]
 
     let dirs = vec![bin_dir.path().to_path_buf()];
     assert_eq!(detect_aur_helper_in_dirs(&dirs), Some(AurHelper::Yay));
-
-    let paru_bin = bin_dir.path().join("paru");
-    File::create(&paru_bin)?.write_all(b"#!/bin/sh\n")?;
-    let mut paru_perms = fs::metadata(&paru_bin)?.permissions();
-    paru_perms.set_mode(0o755);
-    fs::set_permissions(&paru_bin, paru_perms)?;
-
-    // Paru doit être prioritaire sur Yay
-    assert_eq!(detect_aur_helper_in_dirs(&dirs), Some(AurHelper::Paru));
 
     let raw_si = "\
 Repository      : extra
@@ -431,8 +422,8 @@ foliate|3.3.0-3|3209478
     );
 
     assert_eq!(
-        extract_github_from_url("https://github.com/Morganamilo/paru/"),
-        Some((String::from("Morganamilo"), String::from("paru")))
+        extract_github_from_url("https://github.com/Jguer/yay/"),
+        Some((String::from("Jguer"), String::from("yay")))
     );
     assert_eq!(
         resolve_github_owner_repo("neovim", Some("https://neovim.io")),

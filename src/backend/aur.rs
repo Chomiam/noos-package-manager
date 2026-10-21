@@ -21,7 +21,6 @@ pub const AUR_RPC_BASE_URL: &str = "https://aur.archlinux.org/rpc/v5";
 
 pub const POPULAR_AUR_SHOWCASE: &[&str] = &[
     "noos-package-manager",
-    "paru",
     "yay",
     "brave-bin",
     "visual-studio-code-bin",
@@ -256,18 +255,15 @@ pub fn find_executable_in_dirs(binary_name: &str, dirs: &[PathBuf]) -> Option<Pa
     None
 }
 
-/// Détecte automatiquement l'assistant AUR dans une liste de dossiers (`paru` en priorité, sinon `yay`).
+/// Détecte l'assistant AUR `yay` dans une liste de dossiers.
 pub fn detect_aur_helper_in_dirs(dirs: &[PathBuf]) -> Option<AurHelper> {
-    if find_executable_in_dirs(AurHelper::Paru.binary_name(), dirs).is_some() {
-        return Some(AurHelper::Paru);
-    }
     if find_executable_in_dirs(AurHelper::Yay.binary_name(), dirs).is_some() {
         return Some(AurHelper::Yay);
     }
     None
 }
 
-/// Détecte les mises à jour AUR disponibles via `yay -Qua` (ou `paru -Qua`).
+/// Détecte les mises à jour AUR disponibles via `yay -Qua`.
 /// Renvoie une table `nom_du_paquet -> (ancienne_version, nouvelle_version)`.
 pub async fn check_aur_updates_via_helper() -> AppResult<HashMap<String, (String, String)>> {
     let Some(helper) = detect_aur_helper() else {
@@ -294,7 +290,7 @@ pub async fn check_aur_updates_via_helper() -> AppResult<HashMap<String, (String
     }
 }
 
-/// Détecte automatiquement l'assistant AUR disponible sur le système (`paru`, puis fallback `yay`).
+/// Détecte automatiquement l'assistant AUR `yay` sur le système.
 pub fn detect_aur_helper() -> Option<AurHelper> {
     let mut search_dirs: Vec<PathBuf> = env::var_os("PATH")
         .map(|paths| env::split_paths(&paths).collect())
@@ -512,7 +508,7 @@ async fn is_version_newer(installed: &str, candidate: &str) -> bool {
     candidate != installed
 }
 
-/// Installe ou met à jour un paquet AUR via l'assistant détecté (`paru` ou `yay`).
+/// Installe ou met à jour un paquet AUR via `yay`.
 pub async fn install_or_update_aur_package(pkg_name: &str) -> AppResult<String> {
     let helper = detect_aur_helper().ok_or(AppError::AurHelperNotFound)?;
     let bin = helper.binary_name();
@@ -601,7 +597,7 @@ fn try_spawn_terminal_aur_command(helper_bin: &str, pkg_name: &str) -> AppResult
     )))
 }
 
-/// Installe un lot de paquets AUR via `paru` ou `yay` en diffusant les journaux et étapes de progression.
+/// Installe un lot de paquets AUR via `yay` en diffusant les journaux et étapes de progression.
 pub async fn install_aur_packages_streaming(
     targets: &[String],
     known_deps: &[String],

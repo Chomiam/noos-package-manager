@@ -687,7 +687,7 @@ pub async fn wait_for_active_pacman(ui_tx: &async_channel::Sender<UiEvent>) {
     }
 }
 
-/// Supprime un éventuel verrou `/var/lib/pacman/db.lck` orphelin avant d'exécuter un assistant externe (`yay`/`paru`).
+/// Supprime un éventuel verrou `/var/lib/pacman/db.lck` orphelin avant d'exécuter l'assistant `yay`.
 pub async fn ensure_stale_db_lock_removed(ui_tx: &async_channel::Sender<UiEvent>) {
     wait_for_active_pacman(ui_tx).await;
     if std::path::Path::new("/var/lib/pacman/db.lck").exists()

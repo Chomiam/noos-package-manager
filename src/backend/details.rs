@@ -82,7 +82,6 @@ pub fn resolve_github_owner_repo(pkg_name: &str, upstream_url: Option<&str>) -> 
         "go" => Some(("golang", "go")),
         "docker" => Some(("moby", "moby")),
         "git" => Some(("git", "git")),
-        "paru" => Some(("Morganamilo", "paru")),
         "yay" => Some(("Jguer", "yay")),
         _ => None,
     };

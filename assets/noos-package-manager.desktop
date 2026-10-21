@@ -9,6 +9,6 @@ Exec=noos-package-manager
 Icon=noos-package-manager
 Terminal=false
 Categories=System;PackageManager;GTK;GNOME;
-Keywords=pacman;aur;yay;paru;flatpak;flathub;appimage;arch;package;manager;noos;gestionnaire;paquets;
+Keywords=pacman;aur;yay;flatpak;flathub;appimage;arch;package;manager;noos;gestionnaire;paquets;
 StartupNotify=true
 StartupWMClass=org.noos.PackageManager

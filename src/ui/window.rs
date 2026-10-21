@@ -100,11 +100,14 @@ pub fn build_main_window(app: &adw::Application) -> adw::ApplicationWindow {
         .build();
 
     let all_badge = create_sidebar_badge(false);
+    all_badge.set_visible(false);
     let installed_badge = create_sidebar_badge(false);
     let updates_badge = create_sidebar_badge(true);
     let pacman_badge = create_sidebar_badge(false);
+    pacman_badge.set_visible(false);
     let aur_badge = create_sidebar_badge(false);
     let flatpak_badge = create_sidebar_badge(false);
+    flatpak_badge.set_visible(false);
     let appimages_badge = create_sidebar_badge(false);
 
     for category in SidebarCategory::ALL {
@@ -568,7 +571,7 @@ pub fn build_main_window(app: &adw::Application) -> adw::ApplicationWindow {
                 btn.set_sensitive(false);
                 loading_ref.set_title("Vérification des mises à jour en cours…");
                 loading_ref.set_description(Some(
-                    "Synchronisation forcée des bases Pacman (checkupdates), de l'API AUR RPC v5 (yay/paru), de Flathub et des AppImages…",
+                    "Synchronisation forcée des bases Pacman (checkupdates), de l'API AUR RPC v5 (yay), de Flathub et des AppImages…",
                 ));
                 stack_ref.set_visible_child_name("loading");
                 let _ = tx_refresh.send(BackendCommand::CheckAllUpdates);
@@ -590,7 +593,7 @@ pub fn build_main_window(app: &adw::Application) -> adw::ApplicationWindow {
             refresh_ref.set_sensitive(false);
             loading_ref.set_title("Vérification des mises à jour en cours…");
             loading_ref.set_description(Some(
-                "Synchronisation forcée des bases Pacman (checkupdates), de l'API AUR RPC v5 (yay/paru), de Flathub et des AppImages…",
+                "Synchronisation forcée des bases Pacman (checkupdates), de l'API AUR RPC v5 (yay), de Flathub et des AppImages…",
             ));
             stack_ref.set_visible_child_name("loading");
             let _ = tx_chk_empty.send(BackendCommand::CheckAllUpdates);
@@ -1543,12 +1546,15 @@ fn rebuild_package_list_ui(
 
     let (c_all, c_installed, c_updates, c_pacman, c_aur, c_flatpak, c_appimage) = total_counts;
     badges.all_label.set_label(&c_all.to_string());
+    badges.all_label.set_visible(false);
     badges.installed_label.set_label(&c_installed.to_string());
     badges.updates_label.set_label(&c_updates.to_string());
     badges.updates_label.set_visible(c_updates > 0);
     badges.pacman_label.set_label(&c_pacman.to_string());
+    badges.pacman_label.set_visible(false);
     badges.aur_label.set_label(&c_aur.to_string());
     badges.flatpak_label.set_label(&c_flatpak.to_string());
+    badges.flatpak_label.set_visible(false);
     badges.appimages_label.set_label(&c_appimage.to_string());
 
     actions.update_all_btn.set_visible(c_updates > 0);
@@ -1781,7 +1787,7 @@ fn rebuild_package_list_ui(
             ),
             (
                 "AUR · Arch User Repository",
-                "Mises à jour des paquets communautaires AUR compilés via Yay / Paru",
+                "Mises à jour des paquets communautaires AUR compilés via Yay",
                 aur_upds,
             ),
             (
@@ -1841,7 +1847,7 @@ fn rebuild_package_list_ui(
 
         let helper_note = match aur_helper {
             Some(h) => format!(" · Assistant AUR détecté : {}", h.display_name()),
-            None => String::from(" · Aucun assistant AUR détecté (paru/yay)"),
+            None => String::from(" · Aucun assistant AUR détecté (yay)"),
         };
 
         let group_desc = format!(

@@ -65,7 +65,7 @@ pub async fn load_system_catalog_with_options(force_sync: bool) -> AppResult<Cat
             }
         }
         Err(e) => {
-            warnings.push(format!("Vérification des mises à jour AUR (yay/paru) : {e}"));
+            warnings.push(format!("Vérification des mises à jour AUR (yay) : {e}"));
         }
     }
 
@@ -525,7 +525,7 @@ pub async fn refresh_catalog_updates(
             }
         }
         Err(e) => {
-            warnings.push(format!("Vérification des mises à jour AUR (yay/paru) : {e}"));
+            warnings.push(format!("Vérification des mises à jour AUR (yay) : {e}"));
         }
     }
 
@@ -1394,7 +1394,7 @@ pub fn sync_self_installed_binaries() {
 }
 
 /// Exécute la mise à jour globale de tous les paquets système (Pacman via `pkexec pacman -Syu`),
-/// AUR (via `yay` / `paru`) et Flatpak (`flatpak update`) avec suivi dans le Gestionnaire d'installation.
+/// AUR (via `yay`) et Flatpak (`flatpak update`) avec suivi dans le Gestionnaire d'installation.
 pub async fn update_all_system_and_aur_with_progress(
     catalog_update_items: &[PackageItem],
     cancel_handle: &InstallCancelHandle,
