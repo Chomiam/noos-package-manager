@@ -567,5 +567,69 @@ Conflicts With  : None
     assert_eq!(foliate_opts[0].1, "Text-to-speech support");
     assert_eq!(foliate_opts[1].0, "localsearch");
 
+    assert!(crate::backend::pacman::is_pacman_lock_error_text(
+        "error: failed to init transaction (unable to lock database)\n  if you're sure a package manager is not already running, you can remove /var/lib/pacman/db.lck"
+    ));
+    assert!(crate::backend::pacman::is_pacman_lock_error_text(
+        "erreur : impossible de verrouiller la base de données"
+    ));
+    assert!(!crate::backend::pacman::is_pacman_lock_error_text(
+        "error: target not found: nonexistent-package"
+    ));
+
+    // Test du différentiel incrémental du cache (`compute_pacman_aur_diff`)
+    let cached_pkgs = vec![
+        crate::backend::models::PackageItem {
+            id: String::from("pacman:firefox"),
+            name: String::from("firefox"),
+            version: String::from("135.0-1"),
+            description: String::from("Standalone web browser"),
+            source: PackageSource::Pacman,
+            is_installed: true,
+            update_available: Some(String::from("136.0-1")),
+            aur_meta: None,
+        },
+        crate::backend::models::PackageItem {
+            id: String::from("pacman:old-removed-pkg"),
+            name: String::from("old-removed-pkg"),
+            version: String::from("1.0-1"),
+            description: String::from("To be removed"),
+            source: PackageSource::Pacman,
+            is_installed: true,
+            update_available: None,
+            aur_meta: None,
+        },
+    ];
+    let mut current_installed = HashMap::new();
+    current_installed.insert(String::from("firefox"), String::from("136.0-1"));
+    current_installed.insert(String::from("newly-added-pkg"), String::from("2.0-1"));
+
+    let mut current_explicit = HashSet::new();
+    current_explicit.insert(String::from("firefox"));
+    current_explicit.insert(String::from("newly-added-pkg"));
+
+    let current_foreign = HashSet::new();
+    let diff = crate::backend::cache::compute_pacman_aur_diff(
+        &cached_pkgs,
+        &current_installed,
+        &current_explicit,
+        &current_foreign,
+        &["google-chrome"],
+    );
+
+    assert_eq!(diff.added_installed_names, vec![String::from("newly-added-pkg")]);
+    assert_eq!(diff.missing_showcase_names, vec![String::from("google-chrome")]);
+    let retained_ff = diff
+        .retained_installed
+        .iter()
+        .find(|p| p.name == "firefox")
+        .ok_or("firefox absent du cache retenu")?;
+    assert_eq!(retained_ff.version, "136.0-1");
+    assert_eq!(retained_ff.update_available, None);
+    assert!(diff
+        .retained_installed
+        .iter()
+        .all(|p| p.name != "old-removed-pkg"));
+
     Ok(())
 }

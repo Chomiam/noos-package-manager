@@ -1,5 +1,6 @@
 pub mod appimage;
 pub mod aur;
+pub mod cache;
 pub mod details;
 pub mod flatpak;
 pub mod models;
@@ -250,14 +251,454 @@ pub async fn load_system_catalog_with_options(force_sync: bool) -> AppResult<Cat
         .filter(|pkg| pkg.update_available.is_some())
         .count();
 
-    Ok(CatalogSnapshot {
+    let snapshot = CatalogSnapshot {
         packages: installed_packages,
         recommendations,
         flatpak_recommendations,
         updates_count,
         aur_helper,
         non_fatal_warnings: warnings,
-    })
+    };
+
+    cache::save_cached_snapshot(&snapshot);
+
+    Ok(snapshot)
+}
+
+/// Applique un différentiel incrémental rapide sur un `CatalogSnapshot` issu du cache local :
+/// ne requête `pacman -Qi` et l'AUR RPC v5 que pour les paquets nouvellement installés ou retirés
+/// depuis la dernière sauvegarde du cache. Renvoie `(snapshot_reconcilie, a_change)`.
+pub async fn apply_incremental_catalog_diff(
+    cached: &CatalogSnapshot,
+) -> AppResult<(CatalogSnapshot, bool)> {
+    let mut warnings = Vec::new();
+    let aur_helper = aur::detect_aur_helper();
+
+    let mut cached_flatpak_updates: HashMap<String, String> = HashMap::new();
+    let mut cached_appimage_updates: HashMap<String, String> = HashMap::new();
+
+    for pkg in &cached.packages {
+        if let Some(ref upd) = pkg.update_available {
+            match pkg.source {
+                PackageSource::Flatpak => {
+                    if let Some(app_id) = pkg.flatpak_app_id() {
+                        cached_flatpak_updates.insert(app_id.to_string(), upd.clone());
+                    }
+                }
+                PackageSource::AppImage(_) => {
+                    cached_appimage_updates.insert(pkg.id.clone(), upd.clone());
+                }
+                _ => {}
+            }
+        }
+    }
+
+    let (all_ver_res, explicit_res, foreign_res, fp_res, appimage_res) = tokio::join!(
+        pacman::list_all_installed_versions(),
+        pacman::list_explicit_package_names(),
+        pacman::list_foreign_package_names(),
+        flatpak::list_installed_flatpaks(&cached_flatpak_updates),
+        tokio::task::spawn_blocking(appimage::scan_default_directories),
+    );
+
+    let all_installed_versions = all_ver_res.unwrap_or_default();
+    let explicit_set = explicit_res.unwrap_or_default();
+    let foreign_set = foreign_res.unwrap_or_default();
+
+    let diff_plan = cache::compute_pacman_aur_diff(
+        &cached.packages,
+        &all_installed_versions,
+        &explicit_set,
+        &foreign_set,
+        aur::POPULAR_AUR_SHOWCASE,
+    );
+
+    let mut packages = diff_plan.retained_installed;
+
+    // Interroge `pacman -Qi` uniquement pour le différentiel de paquets nouvellement installés
+    if !diff_plan.added_installed_names.is_empty() {
+        match pacman::fetch_installed_packages_by_names(
+            &diff_plan.added_installed_names,
+            &foreign_set,
+            &HashMap::new(),
+        )
+        .await
+        {
+            Ok(mut added_items) => packages.append(&mut added_items),
+            Err(e) => warnings.push(format!("Lecture différentielle Pacman : {e}")),
+        }
+    }
+
+    let mut foreign_installed_versions: HashMap<String, String> = all_installed_versions
+        .iter()
+        .filter(|(name, _)| foreign_set.contains(*name))
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    let self_effective_ver = all_installed_versions
+        .get(SELF_PACKAGE_NAME)
+        .cloned()
+        .unwrap_or_else(|| format!("{SELF_PACKAGE_VERSION}-1"));
+    foreign_installed_versions.insert(SELF_PACKAGE_NAME.to_string(), self_effective_ver);
+
+    let mut aur_missing_names: Vec<String> = diff_plan
+        .added_installed_names
+        .iter()
+        .filter(|n| foreign_set.contains(*n))
+        .cloned()
+        .collect();
+
+    for showcase_missing in &diff_plan.missing_showcase_names {
+        if !aur_missing_names.contains(showcase_missing) {
+            aur_missing_names.push(showcase_missing.clone());
+        }
+    }
+
+    packages.extend(diff_plan.retained_showcase);
+
+    if !aur_missing_names.is_empty() {
+        if let Ok(aur_client) = AurClient::new() {
+            let refs: Vec<&str> = aur_missing_names.iter().map(String::as_str).collect();
+            if let Ok(enriched_aur) = aur_client
+                .fetch_enriched_aur_items(&refs, &foreign_installed_versions)
+                .await
+            {
+                let mut enriched_map: HashMap<String, PackageItem> = enriched_aur
+                    .into_iter()
+                    .map(|p| (p.name.clone(), p))
+                    .collect();
+
+                for pkg in &mut packages {
+                    if matches!(pkg.source, PackageSource::Aur) {
+                        if let Some(rich) = enriched_map.remove(&pkg.name) {
+                            pkg.aur_meta = rich.aur_meta;
+                            pkg.description = rich.description;
+                            if pkg.update_available.is_none() {
+                                pkg.update_available = rich.update_available;
+                            }
+                        }
+                    }
+                }
+
+                let existing_names: HashSet<String> =
+                    packages.iter().map(|p| p.name.clone()).collect();
+                for (_, extra_aur_pkg) in enriched_map {
+                    if !existing_names.contains(&extra_aur_pkg.name) {
+                        packages.push(extra_aur_pkg);
+                    }
+                }
+            }
+        }
+    }
+
+    let mut installed_flatpak_map = HashMap::new();
+    if let Ok(mut installed_fp) = fp_res {
+        for fp in &mut installed_fp {
+            if fp.update_available.as_deref() == Some(fp.version.as_str()) {
+                fp.update_available = None;
+            }
+            if let Some(app_id) = fp.flatpak_app_id() {
+                installed_flatpak_map.insert(app_id.to_string(), fp.version.clone());
+            }
+        }
+        packages.append(&mut installed_fp);
+    }
+
+    match appimage_res {
+        Ok(Ok(mut appimages)) => {
+            for app in &mut appimages {
+                if let Some(upd_ver) = cached_appimage_updates.get(&app.id) {
+                    if &app.version != upd_ver {
+                        app.update_available = Some(upd_ver.clone());
+                    }
+                }
+            }
+            packages.append(&mut appimages);
+        }
+        Ok(Err(e)) => warnings.push(format!("Scan AppImages : {e}")),
+        Err(e) => warnings.push(format!("Tâche AppImage interrompue : {e}")),
+    }
+
+    packages.sort_by_key(|a| a.name.to_lowercase());
+
+    let mut recommendations = if cached.recommendations.is_empty() {
+        pacman::load_recommended_by_category(&all_installed_versions, &HashMap::new())
+            .await
+            .unwrap_or_default()
+    } else {
+        cached.recommendations.clone()
+    };
+    cache::reconcile_pacman_recommendations(&mut recommendations, &all_installed_versions, None);
+
+    let mut flatpak_recommendations = if cached.flatpak_recommendations.is_empty() {
+        flatpak::load_flathub_recommendations_by_category(
+            &installed_flatpak_map,
+            &cached_flatpak_updates,
+        )
+        .await
+        .unwrap_or_default()
+    } else {
+        cached.flatpak_recommendations.clone()
+    };
+    cache::reconcile_flatpak_recommendations(
+        &mut flatpak_recommendations,
+        &installed_flatpak_map,
+        None,
+    );
+
+    let updates_count = packages
+        .iter()
+        .filter(|pkg| pkg.update_available.is_some())
+        .count();
+
+    let has_diff = packages != cached.packages
+        || recommendations != cached.recommendations
+        || flatpak_recommendations != cached.flatpak_recommendations;
+
+    let snapshot = CatalogSnapshot {
+        packages,
+        recommendations,
+        flatpak_recommendations,
+        updates_count,
+        aur_helper,
+        non_fatal_warnings: warnings,
+    };
+
+    if has_diff {
+        cache::save_cached_snapshot(&snapshot);
+    }
+
+    Ok((snapshot, has_diff))
+}
+
+/// Actualise en arrière-plan toutes les mises à jour disponibles (Pacman, AUR, Flatpak, AppImages)
+/// sur un `CatalogSnapshot` existant et met à jour le cache local.
+pub async fn refresh_catalog_updates(
+    mut snapshot: CatalogSnapshot,
+    force_sync: bool,
+) -> AppResult<CatalogSnapshot> {
+    let mut warnings = Vec::new();
+    snapshot.aur_helper = aur::detect_aur_helper();
+
+    let appimage_items: Vec<PackageItem> = snapshot
+        .packages
+        .iter()
+        .filter(|p| matches!(p.source, PackageSource::AppImage(_)))
+        .cloned()
+        .collect();
+
+    let (
+        pacman_upd_res,
+        aur_upd_res,
+        all_ver_res,
+        explicit_res,
+        foreign_res,
+        fp_upd_res,
+        appimage_updates,
+    ) = tokio::join!(
+        pacman::check_updates_map_with_mode(force_sync),
+        aur::check_aur_updates_via_helper(),
+        pacman::list_all_installed_versions(),
+        pacman::list_explicit_package_names(),
+        pacman::list_foreign_package_names(),
+        flatpak::check_flatpak_updates_map(),
+        async {
+            if appimage_items.is_empty() {
+                HashMap::new()
+            } else {
+                appimage::check_appimage_updates(&appimage_items).await
+            }
+        }
+    );
+
+    let mut updates_full = match pacman_upd_res {
+        Ok(map) => map,
+        Err(e) => {
+            warnings.push(format!("Vérification des mises à jour Pacman : {e}"));
+            HashMap::new()
+        }
+    };
+
+    match aur_upd_res {
+        Ok(aur_map) => {
+            for (pkg_name, versions) in aur_map {
+                updates_full.entry(pkg_name).or_insert(versions);
+            }
+        }
+        Err(e) => {
+            warnings.push(format!("Vérification des mises à jour AUR (yay/paru) : {e}"));
+        }
+    }
+
+    let all_installed_versions = all_ver_res.unwrap_or_default();
+    let explicit_set = explicit_res.unwrap_or_default();
+    let foreign_set = foreign_res.unwrap_or_default();
+    let flatpak_updates = fp_upd_res.unwrap_or_default();
+
+    updates_full.retain(|pkg_name, (_, new_v)| {
+        all_installed_versions
+            .get(pkg_name)
+            .is_none_or(|inst_v| inst_v != new_v)
+    });
+
+    let updates_simple: HashMap<String, String> = updates_full
+        .iter()
+        .map(|(k, (_, new_v))| (k.clone(), new_v.clone()))
+        .collect();
+
+    let mut foreign_installed_versions: HashMap<String, String> = all_installed_versions
+        .iter()
+        .filter(|(name, _)| foreign_set.contains(*name))
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    let self_effective_ver = all_installed_versions
+        .get(SELF_PACKAGE_NAME)
+        .cloned()
+        .unwrap_or_else(|| format!("{SELF_PACKAGE_VERSION}-1"));
+    foreign_installed_versions.insert(SELF_PACKAGE_NAME.to_string(), self_effective_ver);
+
+    // Interroge l'API AUR RPC v5 pour les paquets AUR installés (ou l'ensemble si force_sync)
+    let aur_query_names: Vec<String> = snapshot
+        .packages
+        .iter()
+        .filter(|pkg| {
+            matches!(pkg.source, PackageSource::Aur) && (force_sync || pkg.is_installed)
+        })
+        .map(|pkg| pkg.name.clone())
+        .collect();
+
+    let mut enriched_aur_map: HashMap<String, PackageItem> = HashMap::new();
+    if !aur_query_names.is_empty() {
+        if let Ok(aur_client) = AurClient::new() {
+            let refs: Vec<&str> = aur_query_names.iter().map(String::as_str).collect();
+            match aur_client
+                .fetch_enriched_aur_items(&refs, &foreign_installed_versions)
+                .await
+            {
+                Ok(list) => {
+                    for item in list {
+                        enriched_aur_map.insert(item.name.clone(), item);
+                    }
+                }
+                Err(e) => warnings.push(format!("Vérification AUR RPC v5 : {e}")),
+            }
+        }
+    }
+
+    // Si `checkupdates` signale une mise à jour sur une dépendance non présente dans `snapshot.packages`,
+    // on ne charge via `pacman -Qi` que ce différentiel de paquets.
+    let existing_names: HashSet<String> = snapshot
+        .packages
+        .iter()
+        .filter(|p| matches!(p.source, PackageSource::Pacman | PackageSource::Aur))
+        .map(|p| p.name.clone())
+        .collect();
+
+    let missing_upd_names: Vec<String> = updates_full
+        .keys()
+        .filter(|name| !existing_names.contains(*name))
+        .cloned()
+        .collect();
+
+    if !missing_upd_names.is_empty() {
+        if let Ok(mut delta_upd_items) = pacman::fetch_installed_packages_by_names(
+            &missing_upd_names,
+            &foreign_set,
+            &updates_simple,
+        )
+        .await
+        {
+            snapshot.packages.append(&mut delta_upd_items);
+        }
+    }
+
+    // Retire les éventuels paquets dépendances qui n'ont plus de mise à jour en attente
+    snapshot.packages.retain(|pkg| {
+        if matches!(pkg.source, PackageSource::Pacman | PackageSource::Aur) && pkg.is_installed {
+            explicit_set.contains(&pkg.name)
+                || updates_simple.contains_key(&pkg.name)
+                || pkg.name == SELF_PACKAGE_NAME
+        } else {
+            true
+        }
+    });
+
+    let mut installed_flatpak_map = HashMap::new();
+
+    for pkg in &mut snapshot.packages {
+        match pkg.source {
+            PackageSource::Pacman => {
+                if let Some(inst_v) = all_installed_versions.get(&pkg.name) {
+                    pkg.version = inst_v.clone();
+                }
+                pkg.update_available = updates_simple.get(&pkg.name).cloned();
+            }
+            PackageSource::Aur => {
+                if pkg.is_installed {
+                    if let Some(inst_v) = all_installed_versions.get(&pkg.name) {
+                        pkg.version = inst_v.clone();
+                    }
+                }
+                if let Some(rich) = enriched_aur_map.remove(&pkg.name) {
+                    pkg.aur_meta = rich.aur_meta;
+                    pkg.description = rich.description;
+                    if !pkg.is_installed {
+                        pkg.version = rich.version;
+                        pkg.update_available = None;
+                    } else {
+                        pkg.update_available = updates_simple
+                            .get(&pkg.name)
+                            .cloned()
+                            .or(rich.update_available);
+                    }
+                } else if pkg.is_installed {
+                    pkg.update_available = updates_simple.get(&pkg.name).cloned();
+                }
+            }
+            PackageSource::Flatpak => {
+                let app_id_opt = pkg.flatpak_app_id().map(ToString::to_string);
+                if let Some(app_id) = app_id_opt {
+                    if pkg.is_installed {
+                        installed_flatpak_map.insert(app_id.clone(), pkg.version.clone());
+                        pkg.update_available = flatpak_updates
+                            .get(&app_id)
+                            .filter(|new_v| *new_v != &pkg.version)
+                            .cloned();
+                    } else {
+                        pkg.update_available = None;
+                    }
+                }
+            }
+            PackageSource::AppImage(_) => {
+                pkg.update_available = appimage_updates.get(&pkg.id).cloned();
+            }
+        }
+    }
+
+    snapshot
+        .packages
+        .sort_by_key(|a| a.name.to_lowercase());
+
+    cache::reconcile_pacman_recommendations(
+        &mut snapshot.recommendations,
+        &all_installed_versions,
+        Some(&updates_simple),
+    );
+    cache::reconcile_flatpak_recommendations(
+        &mut snapshot.flatpak_recommendations,
+        &installed_flatpak_map,
+        Some(&flatpak_updates),
+    );
+
+    snapshot.updates_count = snapshot
+        .packages
+        .iter()
+        .filter(|pkg| pkg.update_available.is_some())
+        .count();
+    snapshot.non_fatal_warnings = warnings;
+
+    cache::save_cached_snapshot(&snapshot);
+
+    Ok(snapshot)
 }
 
 /// Effectue une recherche combinée asynchrone sur Pacman (`pacman -Ss`), AUR RPC v5 (`search`)

@@ -38,6 +38,8 @@ struct AppUiState {
     aur_helper: Option<AurHelper>,
     active_groups: Vec<adw::PreferencesGroup>,
     debounce_source: Option<glib::SourceId>,
+    lock_dialog_open: bool,
+    lock_dismissed_while_present: bool,
 }
 
 struct CategoryBadgeWidgets {
@@ -624,7 +626,7 @@ pub fn build_main_window(app: &adw::Application) -> adw::ApplicationWindow {
         let banner_ui = error_banner;
         let badges_ui = Rc::clone(&badge_widgets);
         let actions_ui = header_actions;
-        let install_mgr_ui = install_manager;
+        let install_mgr_ui = install_manager.clone();
         let tx_ui = cmd_tx.clone();
         let win_for_shots = window.clone();
         let sidebar_for_shots = sidebar_list.clone();
@@ -647,31 +649,49 @@ pub fn build_main_window(app: &adw::Application) -> adw::ApplicationWindow {
                             let joined = snapshot.non_fatal_warnings.join(" · ");
                             banner_ui.set_title(&joined);
                             banner_ui.set_revealed(true);
+                            if backend::pacman::is_pacman_lock_error_text(&joined) {
+                                state_ui.borrow_mut().lock_dismissed_while_present = false;
+                                let _ = tx_ui.send(BackendCommand::CheckPacmanLock);
+                            }
                         } else {
                             banner_ui.set_revealed(false);
                         }
 
-                        {
+                        let data_changed = {
                             let mut st = state_ui.borrow_mut();
+                            let changed = st.catalog_packages != snapshot.packages
+                                || st.recommendations != snapshot.recommendations
+                                || st.flatpak_recommendations != snapshot.flatpak_recommendations
+                                || st.aur_helper != snapshot.aur_helper;
                             st.catalog_packages = snapshot.packages;
                             st.recommendations = snapshot.recommendations;
                             st.flatpak_recommendations = snapshot.flatpak_recommendations;
                             st.updates_count = snapshot.updates_count;
                             st.aur_helper = snapshot.aur_helper;
+                            changed
+                        };
+
+                        let is_loading_view =
+                            stack.visible_child_name().as_deref() == Some("loading");
+                        if data_changed || is_loading_view {
+                            update_selection_buttons(&state_ui, &actions_ui);
+                            rebuild_package_list_ui(
+                                &state_ui,
+                                &prefs_page,
+                                &stack,
+                                &empty_page,
+                                &badges_ui,
+                                &actions_ui,
+                                &tx_ui,
+                            );
                         }
 
-                        update_selection_buttons(&state_ui, &actions_ui);
-                        rebuild_package_list_ui(
-                            &state_ui,
-                            &prefs_page,
-                            &stack,
-                            &empty_page,
-                            &badges_ui,
-                            &actions_ui,
-                            &tx_ui,
-                        );
-
-                        maybe_schedule_automated_screenshots(&win_for_shots, &sidebar_for_shots);
+                        if is_loading_view {
+                            maybe_schedule_automated_screenshots(
+                                &win_for_shots,
+                                &sidebar_for_shots,
+                            );
+                        }
                     }
                     UiEvent::UpdatesChecked {
                         snapshot,
@@ -686,6 +706,10 @@ pub fn build_main_window(app: &adw::Application) -> adw::ApplicationWindow {
                             let joined = snapshot.non_fatal_warnings.join(" · ");
                             banner_ui.set_title(&joined);
                             banner_ui.set_revealed(true);
+                            if backend::pacman::is_pacman_lock_error_text(&joined) {
+                                state_ui.borrow_mut().lock_dismissed_while_present = false;
+                                let _ = tx_ui.send(BackendCommand::CheckPacmanLock);
+                            }
                         } else {
                             banner_ui.set_revealed(false);
                         }
@@ -848,6 +872,15 @@ pub fn build_main_window(app: &adw::Application) -> adw::ApplicationWindow {
                                     .iter()
                                     .filter(|p| p.update_available.is_some())
                                     .count();
+
+                                backend::cache::save_cached_snapshot(&backend::CatalogSnapshot {
+                                    packages: st.catalog_packages.clone(),
+                                    recommendations: st.recommendations.clone(),
+                                    flatpak_recommendations: st.flatpak_recommendations.clone(),
+                                    updates_count: st.updates_count,
+                                    aur_helper: st.aur_helper,
+                                    non_fatal_warnings: Vec::new(),
+                                });
                             }
                             update_selection_buttons(&state_ui, &actions_ui);
                             rebuild_package_list_ui(
@@ -897,6 +930,21 @@ pub fn build_main_window(app: &adw::Application) -> adw::ApplicationWindow {
                             update_selection_buttons(&state_ui, &actions_ui);
                             banner_ui.set_title(&message);
                             banner_ui.set_revealed(true);
+                            if backend::pacman::is_pacman_lock_error_text(&message) {
+                                state_ui.borrow_mut().lock_dismissed_while_present = false;
+                                show_pacman_lock_repair_dialog(
+                                    &win_for_shots,
+                                    &state_ui,
+                                    &tx_ui,
+                                    backend::pacman::PacmanLockInfo {
+                                        lock_path: String::from(
+                                            backend::pacman::PACMAN_DB_LOCK_PATH,
+                                        ),
+                                        running_processes: Vec::new(),
+                                        is_stale: true,
+                                    },
+                                );
+                            }
                             rebuild_package_list_ui(
                                 &state_ui,
                                 &prefs_page,
@@ -940,8 +988,23 @@ pub fn build_main_window(app: &adw::Application) -> adw::ApplicationWindow {
                             .build();
                         toast_ui.add_toast(toast);
 
-                        banner_ui.set_title(&format!("{title} — {detail}"));
+                        let full_err = format!("{title} — {detail}");
+                        banner_ui.set_title(&full_err);
                         banner_ui.set_revealed(true);
+
+                        if backend::pacman::is_pacman_lock_error_text(&full_err) {
+                            state_ui.borrow_mut().lock_dismissed_while_present = false;
+                            show_pacman_lock_repair_dialog(
+                                &win_for_shots,
+                                &state_ui,
+                                &tx_ui,
+                                backend::pacman::PacmanLockInfo {
+                                    lock_path: String::from(backend::pacman::PACMAN_DB_LOCK_PATH),
+                                    running_processes: Vec::new(),
+                                    is_stale: true,
+                                },
+                            );
+                        }
 
                         rebuild_package_list_ui(
                             &state_ui,
@@ -953,14 +1016,125 @@ pub fn build_main_window(app: &adw::Application) -> adw::ApplicationWindow {
                             &tx_ui,
                         );
                     }
+                    UiEvent::PacmanLockDetected(lock_info) => {
+                        if !install_mgr_ui.is_installing() {
+                            let should_open = {
+                                let st = state_ui.borrow();
+                                !st.lock_dialog_open && !st.lock_dismissed_while_present
+                            };
+                            if should_open {
+                                show_pacman_lock_repair_dialog(
+                                    &win_for_shots,
+                                    &state_ui,
+                                    &tx_ui,
+                                    lock_info,
+                                );
+                            }
+                        }
+                    }
+                    UiEvent::PacmanLockCleared => {
+                        state_ui.borrow_mut().lock_dismissed_while_present = false;
+                    }
+                    UiEvent::PacmanLockRepaired { message } => {
+                        spinner_ui.set_spinning(false);
+                        spinner_ui.set_visible(false);
+                        banner_ui.set_revealed(false);
+                        state_ui.borrow_mut().lock_dismissed_while_present = false;
+
+                        let toast = adw::Toast::builder()
+                            .title(&message)
+                            .timeout(5)
+                            .build();
+                        toast_ui.add_toast(toast);
+
+                        let _ = tx_ui.send(BackendCommand::RefreshCatalog);
+                    }
                 }
             }
         });
     }
 
+    // --- Surveillance automatique périodique du verrou Pacman (/var/lib/pacman/db.lck) ---
+    {
+        let state_poll = Rc::clone(&state);
+        let install_mgr_poll = install_manager;
+        let tx_poll = cmd_tx.clone();
+        glib::timeout_add_local(Duration::from_secs(3), move || {
+            let can_poll = !install_mgr_poll.is_installing()
+                && !state_poll.borrow().lock_dialog_open;
+            if can_poll {
+                let _ = tx_poll.send(BackendCommand::CheckPacmanLock);
+            }
+            glib::ControlFlow::Continue
+        });
+    }
+
     let _ = cmd_tx.send(BackendCommand::RefreshCatalog);
+    let _ = cmd_tx.send(BackendCommand::CheckPacmanLock);
 
     window
+}
+
+fn show_pacman_lock_repair_dialog(
+    parent: &adw::ApplicationWindow,
+    state: &Rc<RefCell<AppUiState>>,
+    cmd_tx: &Sender<BackendCommand>,
+    lock_info: backend::pacman::PacmanLockInfo,
+) {
+    {
+        let mut st = state.borrow_mut();
+        if st.lock_dialog_open {
+            return;
+        }
+        st.lock_dialog_open = true;
+    }
+
+    let body_text = if lock_info.is_stale {
+        format!(
+            "Le fichier de verrouillage « {} » bloque actuellement Pacman alors qu'aucun processus pacman n'est en cours d'exécution (verrou orphelin suite à une opération interrompue).\n\nVoulez-vous supprimer ce verrou et réparer la base de données Pacman maintenant ?",
+            lock_info.lock_path
+        )
+    } else {
+        let procs = lock_info
+            .running_processes
+            .iter()
+            .map(|p| format!("• {p}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        format!(
+            "Le fichier de verrouillage « {} » est actif et un processus Pacman est en cours ou bloqué :\n{}\n\nSi cette opération est bloquée, vous pouvez forcer l'arrêt du processus et supprimer le verrou pour réparer Pacman.",
+            lock_info.lock_path, procs
+        )
+    };
+
+    let dialog = adw::MessageDialog::builder()
+        .transient_for(parent)
+        .modal(true)
+        .heading("Base de données Pacman verrouillée")
+        .body(&body_text)
+        .build();
+
+    dialog.add_response("ignore", "Ignorer");
+    dialog.add_response("repair", "Déverrouiller et réparer Pacman");
+    dialog.set_default_response(Some("repair"));
+    dialog.set_close_response("ignore");
+    dialog.set_response_appearance("repair", adw::ResponseAppearance::Suggested);
+
+    let state_resp = Rc::clone(state);
+    let tx_resp = cmd_tx.clone();
+    dialog.connect_response(None, move |dlg, response| {
+        {
+            let mut st = state_resp.borrow_mut();
+            st.lock_dialog_open = false;
+            st.lock_dismissed_while_present = response != "repair";
+        }
+        if response == "repair" {
+            let _ = tx_resp.send(BackendCommand::RepairPacmanLock);
+        }
+        dlg.close();
+    });
+
+    dialog.present();
 }
 
 fn save_window_screenshot(window: &adw::ApplicationWindow, path: &std::path::Path) {
@@ -2249,25 +2423,76 @@ async fn handle_backend_command(
 ) {
     match command {
         BackendCommand::RefreshCatalog => {
-            let _ = ui_tx
-                .send(UiEvent::LoadingStarted {
-                    message: String::from(
-                        "Synchronisation des recommandations, paquets installés et AppImages…",
-                    ),
-                })
-                .await;
+            if let Some(cached_snapshot) = backend::cache::load_cached_snapshot() {
+                // 1. Affichage instantané depuis le cache local sur disque
+                let _ = ui_tx.send(UiEvent::CatalogLoaded(cached_snapshot.clone())).await;
 
-            match backend::load_system_catalog().await {
-                Ok(snapshot) => {
-                    let _ = ui_tx.send(UiEvent::CatalogLoaded(snapshot)).await;
+                // 2. Calcul rapide du différentiel local (paquets ajoutés/retirés/modifiés)
+                let _ = ui_tx
+                    .send(UiEvent::LoadingStarted {
+                        message: String::from(
+                            "Calcul du différentiel local et actualisation des mises à jour…",
+                        ),
+                    })
+                    .await;
+
+                let base_for_updates =
+                    match backend::apply_incremental_catalog_diff(&cached_snapshot).await {
+                        Ok((diff_snapshot, has_diff)) => {
+                            if has_diff {
+                                let _ = ui_tx
+                                    .send(UiEvent::CatalogLoaded(diff_snapshot.clone()))
+                                    .await;
+                                let _ = ui_tx
+                                    .send(UiEvent::LoadingStarted {
+                                        message: String::from(
+                                            "Actualisation des mises à jour (Pacman, AUR, Flatpak, AppImages)…",
+                                        ),
+                                    })
+                                    .await;
+                            }
+                            diff_snapshot
+                        }
+                        Err(_) => cached_snapshot,
+                    };
+
+                // 3. Actualisation asynchrone des mises à jour en arrière-plan
+                match backend::refresh_catalog_updates(base_for_updates, false).await {
+                    Ok(updated_snapshot) => {
+                        let _ = ui_tx.send(UiEvent::CatalogLoaded(updated_snapshot)).await;
+                    }
+                    Err(err) => {
+                        let _ = ui_tx
+                            .send(UiEvent::OperationError {
+                                title: String::from(
+                                    "Échec de l'actualisation des mises à jour",
+                                ),
+                                detail: err.to_string(),
+                            })
+                            .await;
+                    }
                 }
-                Err(err) => {
-                    let _ = ui_tx
-                        .send(UiEvent::OperationError {
-                            title: String::from("Échec du chargement du catalogue"),
-                            detail: err.to_string(),
-                        })
-                        .await;
+            } else {
+                let _ = ui_tx
+                    .send(UiEvent::LoadingStarted {
+                        message: String::from(
+                            "Initialisation du catalogue local et création du cache…",
+                        ),
+                    })
+                    .await;
+
+                match backend::load_system_catalog().await {
+                    Ok(snapshot) => {
+                        let _ = ui_tx.send(UiEvent::CatalogLoaded(snapshot)).await;
+                    }
+                    Err(err) => {
+                        let _ = ui_tx
+                            .send(UiEvent::OperationError {
+                                title: String::from("Échec du chargement du catalogue"),
+                                detail: err.to_string(),
+                            })
+                            .await;
+                    }
                 }
             }
         }
@@ -2280,7 +2505,19 @@ async fn handle_backend_command(
                 })
                 .await;
 
-            match backend::load_system_catalog_with_options(true).await {
+            let check_res = if let Some(cached_snapshot) = backend::cache::load_cached_snapshot() {
+                let base_snapshot = match backend::apply_incremental_catalog_diff(&cached_snapshot)
+                    .await
+                {
+                    Ok((diff_snap, _)) => diff_snap,
+                    Err(_) => cached_snapshot,
+                };
+                backend::refresh_catalog_updates(base_snapshot, true).await
+            } else {
+                backend::load_system_catalog_with_options(true).await
+            };
+
+            match check_res {
                 Ok(snapshot) => {
                     let summary_toast = if snapshot.updates_count > 0 {
                         format!(
@@ -2617,6 +2854,36 @@ async fn handle_backend_command(
         }
         BackendCommand::UpdateAllSystem { items } => {
             backend::update_all_system_and_aur_with_progress(&items, cancel_handle, ui_tx).await;
+        }
+        BackendCommand::CheckPacmanLock => {
+            if let Some(lock_info) = backend::pacman::inspect_pacman_lock().await {
+                let _ = ui_tx.send(UiEvent::PacmanLockDetected(lock_info)).await;
+            } else {
+                let _ = ui_tx.send(UiEvent::PacmanLockCleared).await;
+            }
+        }
+        BackendCommand::RepairPacmanLock => {
+            let _ = ui_tx
+                .send(UiEvent::LoadingStarted {
+                    message: String::from(
+                        "Réparation et déverrouillage de la base de données Pacman (/var/lib/pacman/db.lck)…",
+                    ),
+                })
+                .await;
+
+            match backend::pacman::repair_pacman_lock().await {
+                Ok(message) => {
+                    let _ = ui_tx.send(UiEvent::PacmanLockRepaired { message }).await;
+                }
+                Err(err) => {
+                    let _ = ui_tx
+                        .send(UiEvent::OperationError {
+                            title: String::from("Échec de la réparation du verrouillage Pacman"),
+                            detail: err.to_string(),
+                        })
+                        .await;
+                }
+            }
         }
     }
 }

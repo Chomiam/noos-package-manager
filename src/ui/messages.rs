@@ -2,12 +2,15 @@ use crate::backend::details::PackageDetailedInfo;
 use crate::backend::models::{
     DependencyStatus, DependencyStepItem, OptionalDependencyItem, PackageItem, PackageSource,
 };
+use crate::backend::pacman::PacmanLockInfo;
 use crate::backend::CatalogSnapshot;
 
 #[derive(Debug, Clone)]
 pub enum BackendCommand {
     RefreshCatalog,
     CheckAllUpdates,
+    CheckPacmanLock,
+    RepairPacmanLock,
     Search {
         query: String,
     },
@@ -97,5 +100,10 @@ pub enum UiEvent {
     OperationError {
         title: String,
         detail: String,
+    },
+    PacmanLockDetected(PacmanLockInfo),
+    PacmanLockCleared,
+    PacmanLockRepaired {
+        message: String,
     },
 }

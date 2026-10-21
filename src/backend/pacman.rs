@@ -515,6 +515,142 @@ else \
     exec pacman \"$@\"; \
 fi";
 
+pub const PACMAN_DB_LOCK_PATH: &str = "/var/lib/pacman/db.lck";
+
+const PACMAN_REPAIR_LOCK_SCRIPT: &str = "killall -TERM pacman checkupdates 2>/dev/null || true; \
+sleep 0.4; \
+killall -KILL pacman checkupdates 2>/dev/null || true; \
+rm -f /var/lib/pacman/db.lck /tmp/checkup-db-*/db.lck; \
+rm -rf /var/lib/pacman/sync/download-* 2>/dev/null || true";
+
+/// Informations détaillées sur un verrouillage détecté de la base de données Pacman.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PacmanLockInfo {
+    pub lock_path: String,
+    pub running_processes: Vec<String>,
+    pub is_stale: bool,
+}
+
+/// Détecte si un message d'erreur ou de journal correspond à une base de données Pacman verrouillée.
+pub fn is_pacman_lock_error_text(text: &str) -> bool {
+    let lower = text.to_lowercase();
+    lower.contains("db.lck")
+        || lower.contains("unable to lock database")
+        || lower.contains("failed to lock database")
+        || lower.contains("verrouiller la base")
+        || lower.contains("base de données est déjà verrouillée")
+}
+
+/// Liste les processus `pacman` actuellement en cours d'exécution avec leur ligne de commande (`pgrep -a -x pacman`).
+pub async fn list_running_pacman_processes() -> Vec<String> {
+    let Ok(output) = Command::new("pgrep")
+        .env("LC_ALL", "C")
+        .args(["-a", "-x", "pacman"])
+        .output()
+        .await
+    else {
+        return Vec::new();
+    };
+
+    if !output.status.success() {
+        return Vec::new();
+    }
+
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(ToString::to_string)
+        .collect()
+}
+
+/// Inspecte l'état du verrou Pacman (`/var/lib/pacman/db.lck` ou base temporaire `checkupdates`).
+/// Renvoie `Some(PacmanLockInfo)` si un fichier `db.lck` est présent.
+pub async fn inspect_pacman_lock() -> Option<PacmanLockInfo> {
+    if std::path::Path::new(PACMAN_DB_LOCK_PATH).exists() {
+        let running_processes = list_running_pacman_processes().await;
+        let is_stale = running_processes.is_empty();
+        return Some(PacmanLockInfo {
+            lock_path: String::from(PACMAN_DB_LOCK_PATH),
+            running_processes,
+            is_stale,
+        });
+    }
+
+    if let Some(db_dir) = find_checkupdates_db_dir() {
+        let lock_file = db_dir.join("db.lck");
+        if lock_file.exists() {
+            let checkup_running = Command::new("pgrep")
+                .args(["-x", "checkupdates"])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .await
+                .map(|s| s.success())
+                .unwrap_or(false);
+
+            if !checkup_running && std::fs::remove_file(&lock_file).is_err() && lock_file.exists() {
+                return Some(PacmanLockInfo {
+                    lock_path: lock_file.display().to_string(),
+                    running_processes: Vec::new(),
+                    is_stale: true,
+                });
+            }
+        }
+    }
+
+    None
+}
+
+/// Répare le verrouillage de la base de données Pacman en arrêtant les éventuels processus `pacman`
+/// bloqués et en supprimant `/var/lib/pacman/db.lck` ainsi que les téléchargements partiels via Polkit (`pkexec`).
+pub async fn repair_pacman_lock() -> AppResult<String> {
+    if let Some(db_dir) = find_checkupdates_db_dir() {
+        let lock_file = db_dir.join("db.lck");
+        if lock_file.exists() {
+            let _ = std::fs::remove_file(&lock_file);
+        }
+    }
+
+    if !std::path::Path::new(PACMAN_DB_LOCK_PATH).exists()
+        && !is_pacman_process_running().await
+    {
+        return Ok(String::from(
+            "La base de données Pacman est déjà déverrouillée et prête à l'emploi.",
+        ));
+    }
+
+    let output = Command::new("pkexec")
+        .env("LC_ALL", "C")
+        .stdin(Stdio::null())
+        .args(["sh", "-c", PACMAN_REPAIR_LOCK_SCRIPT])
+        .output()
+        .await?;
+
+    if output.status.success() && !std::path::Path::new(PACMAN_DB_LOCK_PATH).exists() {
+        Ok(String::from(
+            "Le verrouillage de Pacman (/var/lib/pacman/db.lck) a été supprimé et la base de données est réparée.",
+        ))
+    } else {
+        let exit_code = output.status.code().unwrap_or(1);
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let detail = if exit_code == 126
+            || exit_code == 127
+            || stderr.contains("dismissed")
+            || stderr.contains("Not authorized")
+        {
+            format!(
+                "Élévation de privilèges (Polkit) refusée ou annulée (code {exit_code})."
+            )
+        } else if stderr.is_empty() {
+            format!("Échec de la suppression de {PACMAN_DB_LOCK_PATH} (code {exit_code}).")
+        } else {
+            stderr
+        };
+        Err(AppError::PacmanError(detail))
+    }
+}
+
 /// Vérifie si un processus `pacman` est actuellement en cours d'exécution.
 pub async fn is_pacman_process_running() -> bool {
     Command::new("pgrep")
@@ -659,10 +795,8 @@ async fn fallback_pacman_qu() -> AppResult<HashMap<String, (String, String)>> {
     }
 }
 
-/// Liste les paquets explicitement installés (`pacman -Qqe`) avec leurs métadonnées (`pacman -Qi`).
-pub async fn list_installed_packages(
-    updates_full: &HashMap<String, (String, String)>,
-) -> AppResult<Vec<PackageItem>> {
+/// Récupère l'ensemble des noms de paquets explicitement installés via `pacman -Qqe`.
+pub async fn list_explicit_package_names() -> AppResult<HashSet<String>> {
     let qqe_output = Command::new("pacman")
         .env("LC_ALL", "C")
         .arg("-Qqe")
@@ -677,16 +811,48 @@ pub async fn list_installed_packages(
     }
 
     let qqe_stdout = String::from_utf8(qqe_output.stdout)?;
-    let mut target_names: Vec<String> = qqe_stdout
+    let set = qqe_stdout
         .lines()
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(ToString::to_string)
         .collect();
 
-    let existing_set: HashSet<String> = target_names.iter().cloned().collect();
+    Ok(set)
+}
+
+/// Récupère les fiches installées (`pacman -Qi`) uniquement pour le lot de noms `target_names`.
+pub async fn fetch_installed_packages_by_names(
+    target_names: &[String],
+    foreign_set: &HashSet<String>,
+    updates_simple: &HashMap<String, String>,
+) -> AppResult<Vec<PackageItem>> {
+    if target_names.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let qi_output = Command::new("pacman")
+        .env("LC_ALL", "C")
+        .arg("-Qi")
+        .args(target_names)
+        .output()
+        .await?;
+
+    let qi_stdout = String::from_utf8(qi_output.stdout)?;
+    let mut items = parse_pacman_qi_output(&qi_stdout, foreign_set, updates_simple);
+    items.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(items)
+}
+
+/// Liste les paquets explicitement installés (`pacman -Qqe`) avec leurs métadonnées (`pacman -Qi`).
+pub async fn list_installed_packages(
+    updates_full: &HashMap<String, (String, String)>,
+) -> AppResult<Vec<PackageItem>> {
+    let explicit_set = list_explicit_package_names().await?;
+    let mut target_names: Vec<String> = explicit_set.iter().cloned().collect();
+
     for upd_pkg in updates_full.keys() {
-        if !existing_set.contains(upd_pkg) {
+        if !explicit_set.contains(upd_pkg) {
             target_names.push(upd_pkg.clone());
         }
     }
@@ -701,18 +867,7 @@ pub async fn list_installed_packages(
         .map(|(k, (_, new_v))| (k.clone(), new_v.clone()))
         .collect();
 
-    let qi_output = Command::new("pacman")
-        .env("LC_ALL", "C")
-        .arg("-Qi")
-        .args(&target_names)
-        .output()
-        .await?;
-
-    let qi_stdout = String::from_utf8(qi_output.stdout)?;
-    let mut items = parse_pacman_qi_output(&qi_stdout, &foreign_set, &updates_simple);
-
-    items.sort_by(|a, b| a.name.cmp(&b.name));
-    Ok(items)
+    fetch_installed_packages_by_names(&target_names, &foreign_set, &updates_simple).await
 }
 
 /// Recherche des paquets dans les dépôts synchronisés via `pacman -Ss`.

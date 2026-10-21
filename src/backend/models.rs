@@ -1,7 +1,9 @@
 use std::cmp::Ordering;
 use std::path::PathBuf;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PackageSource {
     Pacman,
     Aur,
@@ -38,7 +40,7 @@ impl PackageSource {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct AurPackageMeta {
     pub votes: u32,
     pub popularity: f64,
@@ -122,7 +124,7 @@ impl AurSortMode {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PackageItem {
     pub id: String,
     pub name: String,
@@ -160,7 +162,7 @@ impl PackageItem {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum RecommendationCategory {
     BrowsersInternet,
     MultimediaCreation,
