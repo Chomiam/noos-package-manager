@@ -106,6 +106,7 @@ pub fn build_main_window(app: &adw::Application) -> adw::ApplicationWindow {
     let pacman_badge = create_sidebar_badge(false);
     pacman_badge.set_visible(false);
     let aur_badge = create_sidebar_badge(false);
+    aur_badge.set_visible(false);
     let flatpak_badge = create_sidebar_badge(false);
     flatpak_badge.set_visible(false);
     let appimages_badge = create_sidebar_badge(false);
@@ -1553,6 +1554,7 @@ fn rebuild_package_list_ui(
     badges.pacman_label.set_label(&c_pacman.to_string());
     badges.pacman_label.set_visible(false);
     badges.aur_label.set_label(&c_aur.to_string());
+    badges.aur_label.set_visible(false);
     badges.flatpak_label.set_label(&c_flatpak.to_string());
     badges.flatpak_label.set_visible(false);
     badges.appimages_label.set_label(&c_appimage.to_string());
