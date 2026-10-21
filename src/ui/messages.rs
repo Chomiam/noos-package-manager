@@ -1,5 +1,7 @@
 use crate::backend::details::PackageDetailedInfo;
-use crate::backend::models::{DependencyStatus, DependencyStepItem, PackageItem, PackageSource};
+use crate::backend::models::{
+    DependencyStatus, DependencyStepItem, OptionalDependencyItem, PackageItem, PackageSource,
+};
 use crate::backend::CatalogSnapshot;
 
 #[derive(Debug, Clone)]
@@ -10,6 +12,9 @@ pub enum BackendCommand {
     },
     FetchPackageDetails {
         item: PackageItem,
+    },
+    PrepareInstallBatch {
+        items: Vec<PackageItem>,
     },
     InstallBatch {
         items: Vec<PackageItem>,
@@ -58,6 +63,10 @@ pub enum UiEvent {
         warnings: Vec<String>,
     },
     PackageDetailsLoaded(Box<PackageDetailedInfo>),
+    OptionalDependenciesPrompt {
+        items: Vec<PackageItem>,
+        optional_deps: Vec<OptionalDependencyItem>,
+    },
     InstallStarted {
         target_names: Vec<String>,
     },

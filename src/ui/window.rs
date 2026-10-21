@@ -392,7 +392,7 @@ pub fn build_main_window(app: &adw::Application) -> adw::ApplicationWindow {
                 return;
             }
             btn.set_sensitive(false);
-            let _ = tx_batch.send(BackendCommand::InstallBatch {
+            let _ = tx_batch.send(BackendCommand::PrepareInstallBatch {
                 items: items_to_install,
             });
         });
@@ -668,6 +668,20 @@ pub fn build_main_window(app: &adw::Application) -> adw::ApplicationWindow {
                     }
                     UiEvent::PackageDetailsLoaded(info) => {
                         actions_ui.details_dialog.show_details(&info);
+                    }
+                    UiEvent::OptionalDependenciesPrompt {
+                        items,
+                        optional_deps,
+                    } => {
+                        spinner_ui.set_spinning(false);
+                        spinner_ui.set_visible(false);
+                        update_selection_buttons(&state_ui, &actions_ui);
+                        install_mgr_ui.prompt_optional_dependencies(
+                            &win_for_shots,
+                            items,
+                            optional_deps,
+                            tx_ui.clone(),
+                        );
                     }
                     UiEvent::InstallStarted { target_names } => {
                         spinner_ui.set_visible(true);
@@ -2149,6 +2163,29 @@ async fn handle_backend_command(
                             detail: err.to_string(),
                         })
                         .await;
+                }
+            }
+        }
+        BackendCommand::PrepareInstallBatch { items } => {
+            let _ = ui_tx
+                .send(UiEvent::LoadingStarted {
+                    message: String::from(
+                        "Vérification des dépendances optionnelles (Pacman / AUR)…",
+                    ),
+                })
+                .await;
+
+            match backend::resolve_optional_dependencies(&items).await {
+                Ok(optional_deps) if optional_deps.iter().any(|d| !d.is_installed) => {
+                    let _ = ui_tx
+                        .send(UiEvent::OptionalDependenciesPrompt {
+                            items,
+                            optional_deps,
+                        })
+                        .await;
+                }
+                _ => {
+                    backend::install_batch_with_progress(&items, cancel_handle, ui_tx).await;
                 }
             }
         }

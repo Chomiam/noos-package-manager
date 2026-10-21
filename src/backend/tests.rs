@@ -24,8 +24,9 @@ use crate::backend::models::{
     AurHelper, AurSortMode, DependencyStatus, PackageSource, RecommendationCategory,
 };
 use crate::backend::pacman::{
-    parse_checkupdates_output, parse_pacman_progress_line, parse_pacman_qi_output,
-    parse_pacman_si_output, parse_pacman_sp_output, parse_pacman_ss_output,
+    parse_checkupdates_output, parse_optdepend_spec, parse_pacman_progress_line,
+    parse_pacman_qi_output, parse_pacman_si_optdepends, parse_pacman_si_output,
+    parse_pacman_sp_output, parse_pacman_ss_output,
 };
 use crate::error::AppError;
 
@@ -523,6 +524,48 @@ Installed Size: 345.0?MB
         &[String::from("org.mozilla.firefox")],
     );
     assert!(fp_prog.is_some());
+
+    assert_eq!(
+        parse_optdepend_spec("rocm-smi-lib: AMD GPU support [installed]"),
+        Some((
+            String::from("rocm-smi-lib"),
+            String::from("AMD GPU support")
+        ))
+    );
+    assert_eq!(
+        parse_optdepend_spec("python>=3.10: scripting support (see :help python)"),
+        Some((
+            String::from("python"),
+            String::from("scripting support (see :help python)")
+        ))
+    );
+    assert_eq!(
+        parse_optdepend_spec("cups"),
+        Some((String::from("cups"), String::new()))
+    );
+    assert_eq!(parse_optdepend_spec("None"), None);
+
+    let raw_si_opt = "\
+Repository      : extra
+Name            : foliate
+Version         : 3.3.0-3
+Optional Deps   : speech-dispatcher: Text-to-speech support
+                  localsearch: Track the locations of files
+Conflicts With  : None
+
+Repository      : extra
+Name            : htop
+Version         : 3.3.0-1
+Optional Deps   : None
+Conflicts With  : None
+";
+    let opt_map = parse_pacman_si_optdepends(raw_si_opt);
+    assert_eq!(opt_map.len(), 1);
+    let foliate_opts = opt_map.get("foliate").ok_or("foliate opts absents")?;
+    assert_eq!(foliate_opts.len(), 2);
+    assert_eq!(foliate_opts[0].0, "speech-dispatcher");
+    assert_eq!(foliate_opts[0].1, "Text-to-speech support");
+    assert_eq!(foliate_opts[1].0, "localsearch");
 
     Ok(())
 }

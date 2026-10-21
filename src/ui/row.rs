@@ -497,9 +497,8 @@ where
 
                 let tx_inst = cmd_tx.clone();
                 let inst_item = item.clone();
-                install_btn.connect_clicked(move |btn| {
-                    btn.set_sensitive(false);
-                    let _ = tx_inst.send(BackendCommand::InstallBatch {
+                install_btn.connect_clicked(move |_| {
+                    let _ = tx_inst.send(BackendCommand::PrepareInstallBatch {
                         items: vec![inst_item.clone()],
                     });
                 });

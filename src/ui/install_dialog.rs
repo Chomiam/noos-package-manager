@@ -1,6 +1,7 @@
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::sync::mpsc::Sender;
 use std::sync::Arc;
 
 use gtk4::glib;
@@ -10,9 +11,11 @@ use libadwaita::prelude::*;
 
 use crate::backend::appimage::format_file_size;
 use crate::backend::models::{
-    DependencyStatus, DependencyStepItem, InstallCancelHandle, PackageItem,
+    DependencyStatus, DependencyStepItem, InstallCancelHandle, OptionalDependencyItem, PackageItem,
+    PackageSource,
 };
 use crate::ui::icons::build_package_icon_widget;
+use crate::ui::messages::BackendCommand;
 
 struct DepRowWidgets {
     status_label: gtk4::Label,
@@ -241,6 +244,343 @@ impl InstallManagerUi {
     pub fn present(&self) {
         self.window.set_visible(true);
         self.window.present();
+    }
+
+    /// Affiche une fenêtre contextuelle permettant à l'utilisateur de cocher ou non les dépendances
+    /// optionnelles (`Optional Deps` Pacman / `OptDepends` AUR) avant de lancer l'installation.
+    pub fn prompt_optional_dependencies(
+        &self,
+        parent: &adw::ApplicationWindow,
+        items: Vec<PackageItem>,
+        optional_deps: Vec<OptionalDependencyItem>,
+        cmd_tx: Sender<BackendCommand>,
+    ) {
+        let toolbar_view = adw::ToolbarView::new();
+        let header_bar = adw::HeaderBar::new();
+
+        let title_widget = adw::WindowTitle::new(
+            "Dépendances optionnelles",
+            "Sélectionnez les paquets et fonctionnalités complémentaires à installer",
+        );
+        header_bar.set_title_widget(Some(&title_widget));
+        toolbar_view.add_top_bar(&header_bar);
+
+        let root_box = gtk4::Box::builder()
+            .orientation(gtk4::Orientation::Vertical)
+            .spacing(12)
+            .margin_top(12)
+            .margin_bottom(14)
+            .margin_start(18)
+            .margin_end(18)
+            .vexpand(true)
+            .hexpand(true)
+            .build();
+
+        let top_controls_box = gtk4::Box::builder()
+            .orientation(gtk4::Orientation::Horizontal)
+            .spacing(8)
+            .valign(gtk4::Align::Center)
+            .build();
+
+        let target_summary = if items.len() == 1 {
+            format!(
+                "Paquet principal : « {} » — cochez les dépendances optionnelles souhaitées :",
+                items[0].name
+            )
+        } else {
+            let names: Vec<&str> = items.iter().map(|i| i.name.as_str()).collect();
+            format!(
+                "{} paquets sélectionnés ({}) :",
+                items.len(),
+                names.join(", ")
+            )
+        };
+
+        let summary_lbl = gtk4::Label::builder()
+            .label(&target_summary)
+            .xalign(0.0)
+            .hexpand(true)
+            .wrap(true)
+            .ellipsize(gtk4::pango::EllipsizeMode::End)
+            .css_classes(["dim-label"])
+            .build();
+        top_controls_box.append(&summary_lbl);
+
+        let select_all_btn = gtk4::Button::builder()
+            .label("Tout cocher")
+            .valign(gtk4::Align::Center)
+            .css_classes(["flat"])
+            .tooltip_text("Cocher toutes les dépendances optionnelles disponibles")
+            .build();
+        top_controls_box.append(&select_all_btn);
+
+        let unselect_all_btn = gtk4::Button::builder()
+            .label("Tout décocher")
+            .valign(gtk4::Align::Center)
+            .css_classes(["flat"])
+            .tooltip_text("Décocher toutes les dépendances optionnelles")
+            .build();
+        top_controls_box.append(&unselect_all_btn);
+
+        root_box.append(&top_controls_box);
+
+        let prefs_page = adw::PreferencesPage::builder()
+            .vexpand(true)
+            .hexpand(true)
+            .build();
+
+        let uninstalled_count = optional_deps.iter().filter(|d| !d.is_installed).count();
+        let installed_count = optional_deps.len().saturating_sub(uninstalled_count);
+
+        let group_title = if items.len() == 1 {
+            format!(
+                "Dépendances optionnelles de « {} »",
+                glib::markup_escape_text(&items[0].name)
+            )
+        } else {
+            String::from("Dépendances optionnelles détectées")
+        };
+
+        let group_desc = if installed_count > 0 {
+            format!(
+                "{uninstalled_count} disponible(s) à l'installation · {installed_count} déjà présente(s) sur le système"
+            )
+        } else {
+            format!("{uninstalled_count} dépendance(s) optionnelle(s) disponible(s)")
+        };
+        let escaped_group_desc = glib::markup_escape_text(&group_desc);
+
+        let group = adw::PreferencesGroup::builder()
+            .title(group_title)
+            .description(escaped_group_desc.as_str())
+            .build();
+
+        let check_entries: Rc<Vec<(gtk4::CheckButton, OptionalDependencyItem)>> = {
+            let mut entries = Vec::new();
+            let multi_targets = items.len() > 1;
+
+            for dep in &optional_deps {
+                let escaped_name = glib::markup_escape_text(&dep.name);
+                let sub_raw = if multi_targets && !dep.required_by.is_empty() {
+                    format!(
+                        "Pour {} — {}",
+                        dep.required_by.join(", "),
+                        dep.description
+                    )
+                } else {
+                    dep.description.clone()
+                };
+                let escaped_sub = glib::markup_escape_text(&sub_raw);
+
+                let row = adw::ActionRow::builder()
+                    .title(escaped_name.as_str())
+                    .subtitle(escaped_sub.as_str())
+                    .title_lines(1)
+                    .subtitle_lines(2)
+                    .build();
+
+                let check_btn = gtk4::CheckButton::builder()
+                    .active(dep.is_installed)
+                    .sensitive(!dep.is_installed)
+                    .valign(gtk4::Align::Center)
+                    .tooltip_text(if dep.is_installed {
+                        "Cette dépendance optionnelle est déjà installée sur votre système"
+                    } else {
+                        "Cocher pour installer cette dépendance optionnelle"
+                    })
+                    .build();
+
+                row.add_prefix(&check_btn);
+                if !dep.is_installed {
+                    row.set_activatable_widget(Some(&check_btn));
+                }
+
+                let temp_pkg = PackageItem {
+                    id: dep.name.clone(),
+                    name: dep.name.clone(),
+                    version: dep.version.clone(),
+                    description: dep.description.clone(),
+                    source: dep.source.clone(),
+                    is_installed: dep.is_installed,
+                    update_available: None,
+                    aur_meta: None,
+                };
+                let icon = build_package_icon_widget(&temp_pkg);
+                icon.set_valign(gtk4::Align::Center);
+                row.add_prefix(&icon);
+
+                let suffix_box = gtk4::Box::new(gtk4::Orientation::Horizontal, 8);
+                suffix_box.set_valign(gtk4::Align::Center);
+
+                let source_badge = gtk4::Label::new(Some(dep.source.label()));
+                source_badge.add_css_class("source-badge");
+                source_badge.add_css_class(dep.source.css_badge_class());
+                source_badge.set_valign(gtk4::Align::Center);
+                suffix_box.append(&source_badge);
+
+                let status_or_ver_text = if dep.is_installed {
+                    String::from("Déjà installé")
+                } else if !dep.version.is_empty() {
+                    dep.version.clone()
+                } else {
+                    String::from("Optionnel")
+                };
+                let ver_pill = gtk4::Label::new(Some(&status_or_ver_text));
+                ver_pill.add_css_class("version-pill");
+                ver_pill.set_valign(gtk4::Align::Center);
+                suffix_box.append(&ver_pill);
+
+                row.add_suffix(&suffix_box);
+                group.add(&row);
+
+                if !dep.is_installed {
+                    entries.push((check_btn, dep.clone()));
+                }
+            }
+
+            Rc::new(entries)
+        };
+
+        prefs_page.add(&group);
+        root_box.append(&prefs_page);
+
+        let bottom_box = gtk4::Box::builder()
+            .orientation(gtk4::Orientation::Horizontal)
+            .spacing(10)
+            .build();
+
+        let cancel_opt_btn = gtk4::Button::builder()
+            .label("Annuler")
+            .css_classes(["pill"])
+            .tooltip_text("Annuler et ne pas lancer l'installation")
+            .build();
+        bottom_box.append(&cancel_opt_btn);
+
+        let spacer = gtk4::Box::builder().hexpand(true).build();
+        bottom_box.append(&spacer);
+
+        let skip_opt_btn = gtk4::Button::builder()
+            .label("Installer sans optionnels")
+            .css_classes(["pill"])
+            .tooltip_text("Installer uniquement le(s) paquet(s) principal(aux) sans dépendances optionnelles")
+            .build();
+        bottom_box.append(&skip_opt_btn);
+
+        let confirm_btn = gtk4::Button::builder()
+            .label("Installer la sélection (0 optionnel)")
+            .css_classes(["suggested-action", "pill"])
+            .tooltip_text("Lancer l'installation avec les dépendances optionnelles cochées")
+            .build();
+        bottom_box.append(&confirm_btn);
+
+        root_box.append(&bottom_box);
+        toolbar_view.set_content(Some(&root_box));
+
+        let opt_window = adw::Window::builder()
+            .transient_for(parent)
+            .modal(true)
+            .title("Dépendances optionnelles")
+            .default_width(720)
+            .default_height(540)
+            .content(&toolbar_view)
+            .build();
+
+        // Mise à jour dynamique du libellé du bouton principal selon le nombre de cases cochées
+        for (btn, _) in check_entries.iter() {
+            let entries_ref = Rc::clone(&check_entries);
+            let confirm_ref = confirm_btn.clone();
+            btn.connect_toggled(move |_| {
+                let checked_count = entries_ref
+                    .iter()
+                    .filter(|(b, _)| b.is_active())
+                    .count();
+                if checked_count == 0 {
+                    confirm_ref.set_label("Installer la sélection (0 optionnel)");
+                } else {
+                    confirm_ref.set_label(&format!(
+                        "Installer avec +{checked_count} optionnel(s)"
+                    ));
+                }
+            });
+        }
+
+        // Bouton "Tout cocher"
+        {
+            let entries_ref = Rc::clone(&check_entries);
+            select_all_btn.connect_clicked(move |_| {
+                for (btn, _) in entries_ref.iter() {
+                    btn.set_active(true);
+                }
+            });
+        }
+
+        // Bouton "Tout décocher"
+        {
+            let entries_ref = Rc::clone(&check_entries);
+            unselect_all_btn.connect_clicked(move |_| {
+                for (btn, _) in entries_ref.iter() {
+                    btn.set_active(false);
+                }
+            });
+        }
+
+        // Bouton "Annuler"
+        {
+            let win_ref = opt_window.clone();
+            cancel_opt_btn.connect_clicked(move |_| {
+                win_ref.close();
+            });
+        }
+
+        // Bouton "Installer sans optionnels"
+        {
+            let win_ref = opt_window.clone();
+            let base_items = items.clone();
+            let tx_skip = cmd_tx.clone();
+            skip_opt_btn.connect_clicked(move |_| {
+                win_ref.close();
+                let _ = tx_skip.send(BackendCommand::InstallBatch {
+                    items: base_items.clone(),
+                });
+            });
+        }
+
+        // Bouton "Installer avec +N optionnel(s)"
+        {
+            let win_ref = opt_window.clone();
+            let entries_ref = Rc::clone(&check_entries);
+            let base_items = items;
+            let tx_confirm = cmd_tx;
+            confirm_btn.connect_clicked(move |_| {
+                let mut final_items = base_items.clone();
+                for (btn, opt_dep) in entries_ref.iter() {
+                    if btn.is_active()
+                        && !final_items.iter().any(|i| i.name == opt_dep.name)
+                    {
+                        let id_prefix = match opt_dep.source {
+                            PackageSource::Pacman => "pacman",
+                            PackageSource::Aur => "aur",
+                            PackageSource::Flatpak => "flatpak",
+                            PackageSource::AppImage(_) => "appimage",
+                        };
+                        final_items.push(PackageItem {
+                            id: format!("{id_prefix}:{}", opt_dep.name),
+                            name: opt_dep.name.clone(),
+                            version: opt_dep.version.clone(),
+                            description: opt_dep.description.clone(),
+                            source: opt_dep.source.clone(),
+                            is_installed: false,
+                            update_available: None,
+                            aur_meta: None,
+                        });
+                    }
+                }
+                win_ref.close();
+                let _ = tx_confirm.send(BackendCommand::InstallBatch { items: final_items });
+            });
+        }
+
+        opt_window.present();
     }
 
     pub fn on_install_started(&self, target_names: &[String]) {

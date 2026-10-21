@@ -13,8 +13,8 @@ use std::path::PathBuf;
 
 use crate::backend::aur::AurClient;
 use crate::backend::models::{
-    AurHelper, DependencyStatus, DependencyStepItem, InstallCancelHandle, PackageItem,
-    PackageSource, RecommendationCategory,
+    AurHelper, DependencyStatus, DependencyStepItem, InstallCancelHandle, OptionalDependencyItem,
+    PackageItem, PackageSource, RecommendationCategory,
 };
 use crate::error::AppResult;
 use crate::ui::messages::UiEvent;
@@ -382,6 +382,205 @@ pub async fn remove_item(name: &str, source: &PackageSource) -> AppResult<String
     }
 }
 
+/// Résout les dépendances optionnelles (`Optional Deps` Pacman et `OptDepends` AUR) pour un lot
+/// de paquets sélectionnés en vue d'une installation.
+/// Renvoie une liste vide si aucune dépendance optionnelle non installée n'est disponible.
+pub async fn resolve_optional_dependencies(
+    items: &[PackageItem],
+) -> AppResult<Vec<OptionalDependencyItem>> {
+    let pacman_targets: Vec<String> = items
+        .iter()
+        .filter(|i| matches!(i.source, PackageSource::Pacman) && !i.is_installed)
+        .map(|i| i.name.clone())
+        .collect();
+
+    let aur_targets: Vec<String> = items
+        .iter()
+        .filter(|i| matches!(i.source, PackageSource::Aur) && !i.is_installed)
+        .map(|i| i.name.clone())
+        .collect();
+
+    if pacman_targets.is_empty() && aur_targets.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let explicit_names: HashSet<String> = items.iter().map(|i| i.name.clone()).collect();
+
+    let mut ordered_dep_names: Vec<String> = Vec::new();
+    let mut dep_meta_map: HashMap<String, (String, Vec<String>)> = HashMap::new();
+
+    if !pacman_targets.is_empty() {
+        if let Ok(pac_opt_map) = pacman::fetch_pacman_optdepends(&pacman_targets).await {
+            for parent_name in &pacman_targets {
+                if let Some(opt_list) = pac_opt_map.get(parent_name) {
+                    for (dep_name, reason) in opt_list {
+                        if explicit_names.contains(dep_name) {
+                            continue;
+                        }
+                        let entry = dep_meta_map.entry(dep_name.clone()).or_insert_with(|| {
+                            ordered_dep_names.push(dep_name.clone());
+                            (reason.clone(), Vec::new())
+                        });
+                        if entry.0.is_empty() && !reason.is_empty() {
+                            entry.0 = reason.clone();
+                        }
+                        if !entry.1.contains(parent_name) {
+                            entry.1.push(parent_name.clone());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let aur_client = AurClient::new().ok();
+
+    if !aur_targets.is_empty() {
+        if let Some(ref client) = aur_client {
+            let refs: Vec<&str> = aur_targets.iter().map(String::as_str).collect();
+            if let Ok(raw_pkgs) = client.fetch_raw_packages(&refs).await {
+                for pkg in raw_pkgs {
+                    for opt_raw in &pkg.opt_depends {
+                        if let Some((dep_name, reason)) = pacman::parse_optdepend_spec(opt_raw) {
+                            if explicit_names.contains(&dep_name) {
+                                continue;
+                            }
+                            let entry =
+                                dep_meta_map.entry(dep_name.clone()).or_insert_with(|| {
+                                    ordered_dep_names.push(dep_name.clone());
+                                    (reason.clone(), Vec::new())
+                                });
+                            if entry.0.is_empty() && !reason.is_empty() {
+                                entry.0 = reason;
+                            }
+                            if !entry.1.contains(&pkg.name) {
+                                entry.1.push(pkg.name.clone());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if ordered_dep_names.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let (installed_res, unsatisfied_set) = tokio::join!(
+        pacman::list_all_installed_versions(),
+        pacman::check_unsatisfied_dependencies(&ordered_dep_names)
+    );
+    let installed_versions = installed_res.unwrap_or_default();
+
+    // Si toutes les dépendances optionnelles sont déjà satisfaites sur le système, inutile d'afficher la fenêtre
+    let has_any_uninstalled = ordered_dep_names
+        .iter()
+        .any(|name| !installed_versions.contains_key(name) && unsatisfied_set.contains(name));
+    if !has_any_uninstalled {
+        return Ok(Vec::new());
+    }
+
+    let pacman_si_map = pacman::fetch_pacman_si_map(&ordered_dep_names, &installed_versions)
+        .await
+        .unwrap_or_default();
+
+    let unknown_names: Vec<String> = ordered_dep_names
+        .iter()
+        .filter(|name| !pacman_si_map.contains_key(*name))
+        .cloned()
+        .collect();
+
+    let mut aur_info_map: HashMap<String, crate::backend::aur::AurRpcPackage> = HashMap::new();
+    if !unknown_names.is_empty() {
+        if let Some(ref client) = aur_client {
+            let refs: Vec<&str> = unknown_names.iter().map(String::as_str).collect();
+            if let Ok(aur_pkgs) = client.fetch_raw_packages(&refs).await {
+                for p in aur_pkgs {
+                    aur_info_map.insert(p.name.clone(), p);
+                }
+            }
+        }
+    }
+
+    let mut results = Vec::new();
+    for dep_name in ordered_dep_names {
+        let Some((reason, required_by)) = dep_meta_map.remove(&dep_name) else {
+            continue;
+        };
+
+        let is_installed =
+            installed_versions.contains_key(&dep_name) || !unsatisfied_set.contains(&dep_name);
+
+        if let Some(pac_item) = pacman_si_map.get(&dep_name) {
+            let desc = if !reason.is_empty() {
+                reason
+            } else if !pac_item.description.is_empty() {
+                pac_item.description.clone()
+            } else {
+                String::from("Dépendance optionnelle (dépôt officiel Pacman)")
+            };
+            results.push(OptionalDependencyItem {
+                name: dep_name,
+                version: pac_item.version.clone(),
+                description: desc,
+                required_by,
+                source: PackageSource::Pacman,
+                is_installed,
+            });
+        } else if let Some(aur_pkg) = aur_info_map.get(&dep_name) {
+            let desc = if !reason.is_empty() {
+                reason
+            } else {
+                aur_pkg
+                    .description
+                    .clone()
+                    .unwrap_or_else(|| String::from("Dépendance optionnelle (AUR)"))
+            };
+            let ver = installed_versions
+                .get(&dep_name)
+                .cloned()
+                .unwrap_or_else(|| aur_pkg.version.clone());
+            results.push(OptionalDependencyItem {
+                name: dep_name,
+                version: ver,
+                description: desc,
+                required_by,
+                source: PackageSource::Aur,
+                is_installed,
+            });
+        } else if is_installed || pacman::can_resolve_in_pacman(&dep_name).await {
+            let desc = if !reason.is_empty() {
+                reason
+            } else {
+                String::from("Fonctionnalité ou dépendance optionnelle")
+            };
+            let ver = installed_versions
+                .get(&dep_name)
+                .cloned()
+                .unwrap_or_else(|| String::from("fourni par dépôt"));
+            results.push(OptionalDependencyItem {
+                name: dep_name,
+                version: ver,
+                description: desc,
+                required_by,
+                source: PackageSource::Pacman,
+                is_installed,
+            });
+        }
+    }
+
+    // Ne conserver que si au moins une dépendance optionnelle résolue n'est pas encore installée
+    if !results.iter().any(|d| !d.is_installed) {
+        return Ok(Vec::new());
+    }
+
+    // Placer les dépendances optionnelles non installées en tête de liste
+    results.sort_by_key(|d| d.is_installed);
+
+    Ok(results)
+}
+
 /// Exécute l'installation d'un lot de paquets (Pacman, AUR et/ou Flatpak) avec résolution préalable
 /// des dépendances et diffusion temps réel de la progression au Gestionnaire d'installation.
 pub async fn install_batch_with_progress(
@@ -607,17 +806,40 @@ pub async fn install_batch_with_progress(
                         }
                     }
                     None => {
-                        let _ = ui_tx
-                            .send(UiEvent::InstallFinished {
-                                success: false,
-                                message: format!(
-                                    "Vérification échouée : le paquet « {} » n'apparaît pas comme installé après la transaction.",
-                                    item.name
-                                ),
-                                installed_ids: Vec::new(),
-                            })
-                            .await;
-                        return;
+                        let unsatisfied =
+                            pacman::check_unsatisfied_dependencies(std::slice::from_ref(&item.name))
+                                .await;
+                        if unsatisfied.is_empty() {
+                            let _ = ui_tx
+                                .send(UiEvent::InstallProgress {
+                                    phase: format!(
+                                        "Vérification : dépendance « {} » satisfaite",
+                                        item.name
+                                    ),
+                                    fraction: 0.98,
+                                    active_package: Some((
+                                        item.name.clone(),
+                                        DependencyStatus::Completed,
+                                    )),
+                                    log_line: Some(format!(
+                                        "[Vérifié] La dépendance ou provision « {} » est installée.",
+                                        item.name
+                                    )),
+                                })
+                                .await;
+                        } else {
+                            let _ = ui_tx
+                                .send(UiEvent::InstallFinished {
+                                    success: false,
+                                    message: format!(
+                                        "Vérification échouée : le paquet « {} » n'apparaît pas comme installé après la transaction.",
+                                        item.name
+                                    ),
+                                    installed_ids: Vec::new(),
+                                })
+                                .await;
+                            return;
+                        }
                     }
                 }
             }

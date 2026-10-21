@@ -39,11 +39,12 @@ Il réunit au sein d'une seule interface fluide (compatible avec les thèmes GNO
 - **Gestion locale des AppImages (Glisser-Déposer)** :
   - Zone de **Glisser-Déposer (Drag & Drop)** dans l'onglet *AppImages* : déplace automatiquement les fichiers `.AppImage` dans `~/Applications` (créé automatiquement), applique la permission d'exécution (`chmod +x`), extrait l'icône embarquée et crée le raccourci `.desktop` dans le menu démarrer (`~/.local/share/applications`).
   - Vérification et installation des mises à jour d'AppImages via **GitHub Releases** et suppression propre (binaire + raccourci du menu démarrer).
-- **Sélection multiple & Gestionnaire d'installation temps réel** :
+- **Sélection multiple, Dépendances optionnelles & Gestionnaire d'installation temps réel** :
   - Cases à cocher permettant de sélectionner plusieurs paquets (Pacman, AUR, Flatpak) et de lancer une installation groupée via le bouton **`Installer (N)`**.
+  - **Fenêtre contextuelle de dépendances optionnelles (`Optional Deps` Pacman & `OptDepends` AUR)** : lors de l'installation d'un paquet possédant des dépendances optionnelles non installées, une fenêtre permet de cocher à la carte les fonctionnalités et paquets complémentaires souhaités avant de lancer la transaction.
   - **Gestionnaire d'installation** dédié affichant la résolution des dépendances, la taille totale de téléchargement, la barre de progression en direct, l'état individuel de chaque dépendance, les journaux console, un bouton **Annuler l'installation** avec confirmation, ainsi qu'une alerte de sécurité si l'utilisateur tente de fermer l'application pendant une transaction.
-- **Mises à jour globales unifiées** :
-  - Vérification simultanée des mises à jour Pacman (`checkupdates`), AUR (`yay -Qua` / `paru -Qua`), Flatpak (`flatpak remote-ls --updates`) et AppImages.
+- **Mises à jour globales unifiées & catégorisées** :
+  - Vérification simultanée et affichage par sections dédiées (**Pacman**, **AUR**, **Flatpak**, **AppImages**) des mises à jour disponibles (`checkupdates`, `yay -Qua` / `paru -Qua`, `flatpak remote-ls --updates`, GitHub Releases).
 - **Fiches détaillées & README intégrés** :
   - Bouton d'information `ℹ` sur chaque paquet ouvrant une fenêtre contextuelle avec métadonnées complètes, liens directs vers le **Site officiel** et **GitHub**, et rendu natif du **README** (GitHub / GitLab / Flathub / documentation locale).
 

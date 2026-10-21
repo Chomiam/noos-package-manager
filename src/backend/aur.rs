@@ -365,6 +365,30 @@ impl AurClient {
         Ok(all_items)
     }
 
+    /// Récupère les objets bruts `AurRpcPackage` depuis `/rpc/v5/info` (incluant `OptDepends`, `Depends`, etc.).
+    pub async fn fetch_raw_packages(&self, packages: &[&str]) -> AppResult<Vec<AurRpcPackage>> {
+        if packages.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut all_pkgs = Vec::new();
+        for chunk in packages.chunks(100) {
+            let url = build_info_url(chunk);
+            let response = self.http.get(&url).send().await?.error_for_status()?;
+            let body = response.text().await?;
+            let parsed: AurRpcResponse = serde_json::from_str(&body)?;
+            if parsed.response_type == "error" {
+                let msg = parsed.error.unwrap_or_else(|| {
+                    String::from("Erreur inconnue renvoyée par l'API AUR RPC v5")
+                });
+                return Err(AppError::AurApiError(msg));
+            }
+            all_pkgs.extend(parsed.results);
+        }
+
+        Ok(all_pkgs)
+    }
+
     /// Récupère les métadonnées AUR complètes et les mises à jour pour une liste de paquets.
     pub async fn fetch_enriched_aur_items(
         &self,

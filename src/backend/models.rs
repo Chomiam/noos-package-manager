@@ -525,6 +525,16 @@ pub struct DependencyStepItem {
     pub status: DependencyStatus,
 }
 
+#[derive(Debug, Clone)]
+pub struct OptionalDependencyItem {
+    pub name: String,
+    pub version: String,
+    pub description: String,
+    pub required_by: Vec<String>,
+    pub source: PackageSource,
+    pub is_installed: bool,
+}
+
 #[derive(Debug, Default)]
 pub struct InstallCancelHandle {
     cancelled: std::sync::atomic::AtomicBool,

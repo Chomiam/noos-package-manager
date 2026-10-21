@@ -127,6 +127,182 @@ pub fn parse_pacman_si_output(
     map
 }
 
+/// Parse une spécification de dépendance optionnelle (`Optional Deps` ou `OptDepends`),
+/// par exemple `"rocm-smi-lib: AMD GPU support"` ou `"python>=3.10: scripting"`,
+/// en renvoyant `(nom_du_paquet, description_optionnelle)`.
+pub fn parse_optdepend_spec(raw: &str) -> Option<(String, String)> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() || trimmed == "None" {
+        return None;
+    }
+
+    let (pkg_part, reason_part) = match trimmed.split_once(':') {
+        Some((left, right)) => (left.trim(), right.trim()),
+        None => (trimmed, ""),
+    };
+
+    let clean_name = pkg_part
+        .split(['>', '<', '='])
+        .next()
+        .unwrap_or(pkg_part)
+        .split_whitespace()
+        .next()
+        .unwrap_or("")
+        .trim();
+
+    if clean_name.is_empty() {
+        return None;
+    }
+
+    let clean_reason = reason_part
+        .strip_suffix("[installed]")
+        .or_else(|| reason_part.strip_suffix("[pending]"))
+        .unwrap_or(reason_part)
+        .trim()
+        .to_string();
+
+    Some((clean_name.to_string(), clean_reason))
+}
+
+/// Parse la sortie de `pacman -Si` (en locale C) pour extraire la liste des dépendances optionnelles
+/// (`Optional Deps`) de chaque paquet : `nom_du_paquet -> Vec<(nom_opt_dep, raison)>`.
+pub fn parse_pacman_si_optdepends(raw: &str) -> HashMap<String, Vec<(String, String)>> {
+    let mut map = HashMap::new();
+
+    for block in raw.split("\n\n") {
+        let trimmed = block.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        let mut pkg_name = String::new();
+        let mut opt_deps = Vec::new();
+        let mut in_opt_deps = false;
+
+        for line in trimmed.lines() {
+            if (line.starts_with(' ') || line.starts_with('\t')) && in_opt_deps {
+                if let Some(parsed) = parse_optdepend_spec(line) {
+                    opt_deps.push(parsed);
+                }
+                continue;
+            }
+
+            if let Some((key, val)) = line.split_once(':') {
+                let k = key.trim();
+                let v = val.trim();
+                in_opt_deps = false;
+
+                match k {
+                    "Name" => pkg_name = v.to_string(),
+                    "Optional Deps" if !v.is_empty() && v != "None" => {
+                        if let Some(parsed) = parse_optdepend_spec(v) {
+                            opt_deps.push(parsed);
+                        }
+                        in_opt_deps = true;
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        if !pkg_name.is_empty() && !opt_deps.is_empty() {
+            map.insert(pkg_name, opt_deps);
+        }
+    }
+
+    map
+}
+
+/// Récupère via `pacman -Si` les dépendances optionnelles déclarées pour un lot de paquets Pacman.
+pub async fn fetch_pacman_optdepends(
+    targets: &[String],
+) -> AppResult<HashMap<String, Vec<(String, String)>>> {
+    if targets.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    let output = Command::new("pacman")
+        .env("LC_ALL", "C")
+        .arg("-Si")
+        .args(targets)
+        .output()
+        .await?;
+
+    let stdout = String::from_utf8(output.stdout)?;
+    Ok(parse_pacman_si_optdepends(&stdout))
+}
+
+/// Récupère les fiches `PackageItem` d'un lot de noms de paquets dans les dépôts officiels via `pacman -Si`.
+pub async fn fetch_pacman_si_map(
+    names: &[String],
+    installed_versions: &HashMap<String, String>,
+) -> AppResult<HashMap<String, PackageItem>> {
+    if names.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    let output = Command::new("pacman")
+        .env("LC_ALL", "C")
+        .arg("-Si")
+        .args(names)
+        .output()
+        .await?;
+
+    let stdout = String::from_utf8(output.stdout)?;
+    Ok(parse_pacman_si_output(
+        &stdout,
+        installed_versions,
+        &HashMap::new(),
+    ))
+}
+
+/// Vérifie via `pacman -T` quelles dépendances parmi `names` ne sont pas encore satisfaites sur le système
+/// (gère aussi bien les noms de paquets exacts que les provisions virtuelles comme `org.freedesktop.secrets`).
+pub async fn check_unsatisfied_dependencies(names: &[String]) -> HashSet<String> {
+    if names.is_empty() {
+        return HashSet::new();
+    }
+
+    let Ok(output) = Command::new("pacman")
+        .env("LC_ALL", "C")
+        .arg("-T")
+        .args(names)
+        .output()
+        .await
+    else {
+        return names.iter().cloned().collect();
+    };
+
+    if output.status.success() {
+        return HashSet::new();
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    stdout
+        .lines()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .filter_map(|line| {
+            line.split(['>', '<', '='])
+                .next()
+                .map(|s| s.trim().to_string())
+        })
+        .collect()
+}
+
+/// Vérifie si une dépendance ou provision virtuelle est résoluble par Pacman (`pacman -Sp`).
+pub async fn can_resolve_in_pacman(pkg_or_provision: &str) -> bool {
+    Command::new("pacman")
+        .env("LC_ALL", "C")
+        .args(["-Sp", "--print-format", "%n", pkg_or_provision])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .await
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
 /// Charge les paquets Pacman recommandés organisés par catégories thématiques via `pacman -Si`.
 /// Au sein de chaque catégorie, les paquets non installés sont placés en premier afin de ne pas
 /// mettre les paquets déjà installés en tête de liste.
