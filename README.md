@@ -43,8 +43,10 @@ Il réunit au sein d'une seule interface fluide (compatible avec les thèmes GNO
   - Cases à cocher permettant de sélectionner plusieurs paquets (Pacman, AUR, Flatpak) et de lancer une installation groupée via le bouton **`Installer (N)`**.
   - **Fenêtre contextuelle de dépendances optionnelles (`Optional Deps` Pacman & `OptDepends` AUR)** : lors de l'installation d'un paquet possédant des dépendances optionnelles non installées, une fenêtre permet de cocher à la carte les fonctionnalités et paquets complémentaires souhaités avant de lancer la transaction.
   - **Gestionnaire d'installation** dédié affichant la résolution des dépendances, la taille totale de téléchargement, la barre de progression en direct, l'état individuel de chaque dépendance, les journaux console, un bouton **Annuler l'installation** avec confirmation, ainsi qu'une alerte de sécurité si l'utilisateur tente de fermer l'application pendant une transaction.
-- **Mises à jour globales unifiées & catégorisées** :
+- **Mises à jour globales unifiées, Cache local & Auto-redémarrage** :
+  - **Cache local instantané & Différentiel incrémental** : démarrage immédiat depuis `~/.cache/noos-package-manager/catalog_cache_v1.json`, calcul uniquement des différences locales (`pacman -Q` / `-Qqe` / `-Qqm`) et actualisation asynchrone des mises à jour en arrière-plan.
   - Vérification simultanée et affichage par sections dédiées (**Pacman**, **AUR**, **Flatpak**, **AppImages**) des mises à jour disponibles (`checkupdates`, `yay -Qua` / `paru -Qua`, `flatpak remote-ls --updates`, GitHub Releases).
+  - Détection automatique des mises à jour AUR de `noos-package-manager` lui-même avec synchronisation atomique des binaires et **redémarrage automatique** de l'application une fois sa mise à jour appliquée.
 - **Fiches détaillées & README intégrés** :
   - Bouton d'information `ℹ` sur chaque paquet ouvrant une fenêtre contextuelle avec métadonnées complètes, liens directs vers le **Site officiel** et **GitHub**, et rendu natif du **README** (GitHub / GitLab / Flathub / documentation locale).
 
