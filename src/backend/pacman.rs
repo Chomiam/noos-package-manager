@@ -602,6 +602,54 @@ pub async fn inspect_pacman_lock() -> Option<PacmanLockInfo> {
     None
 }
 
+/// Vérifie si le processus courant s'exécute sous `PR_SET_NO_NEW_PRIVS` (`NoNewPrivileges: 1` dans `/proc/self/status`),
+/// ce qui empêche l'exécution directe de binaires setuid comme `pkexec`.
+pub fn has_no_new_privileges() -> bool {
+    if let Ok(status) = std::fs::read_to_string("/proc/self/status") {
+        for line in status.lines() {
+            if let Some(val) = line.strip_prefix("NoNewPrivileges:") {
+                return val.trim() != "0";
+            }
+        }
+    }
+    false
+}
+
+/// Construit une commande `pkexec` capable de fonctionner même si le processus appelant a été lancé
+/// depuis un environnement avec `NoNewPrivileges=1` (en déléguant l'exécution au gestionnaire `systemd --user` hôte).
+pub fn build_pkexec_command() -> Command {
+    if has_no_new_privileges() && std::path::Path::new("/usr/bin/systemd-run").exists() {
+        let mut cmd = Command::new("systemd-run");
+        cmd.args([
+            "--user",
+            "--pipe",
+            "--wait",
+            "--quiet",
+            "--collect",
+            "--setenv=LC_ALL=C",
+        ]);
+        for var in [
+            "DISPLAY",
+            "WAYLAND_DISPLAY",
+            "XAUTHORITY",
+            "XDG_RUNTIME_DIR",
+            "DBUS_SESSION_BUS_ADDRESS",
+        ] {
+            if let Ok(val) = std::env::var(var) {
+                if !val.is_empty() {
+                    cmd.arg(format!("--setenv={var}={val}"));
+                }
+            }
+        }
+        cmd.arg("pkexec");
+        cmd
+    } else {
+        let mut cmd = Command::new("pkexec");
+        cmd.env("LC_ALL", "C");
+        cmd
+    }
+}
+
 /// Répare le verrouillage de la base de données Pacman en arrêtant les éventuels processus `pacman`
 /// bloqués et en supprimant `/var/lib/pacman/db.lck` ainsi que les téléchargements partiels via Polkit (`pkexec`).
 pub async fn repair_pacman_lock() -> AppResult<String> {
@@ -620,8 +668,7 @@ pub async fn repair_pacman_lock() -> AppResult<String> {
         ));
     }
 
-    let output = Command::new("pkexec")
-        .env("LC_ALL", "C")
+    let output = build_pkexec_command()
         .stdin(Stdio::null())
         .args(["sh", "-c", PACMAN_REPAIR_LOCK_SCRIPT])
         .output()
@@ -703,8 +750,7 @@ pub async fn ensure_stale_db_lock_removed(ui_tx: &async_channel::Sender<UiEvent>
                 )),
             })
             .await;
-        let _ = Command::new("pkexec")
-            .env("LC_ALL", "C")
+        let _ = build_pkexec_command()
             .stdin(Stdio::null())
             .args(["rm", "-f", "/var/lib/pacman/db.lck"])
             .output()
@@ -904,8 +950,7 @@ pub async fn search_packages(
 
 /// Installe un paquet officiel via `pkexec pacman -Sy --noconfirm --needed`.
 pub async fn install_package(pkg_name: &str) -> AppResult<String> {
-    let output = Command::new("pkexec")
-        .env("LC_ALL", "C")
+    let output = build_pkexec_command()
         .stdin(Stdio::null())
         .args([
             "sh",
@@ -934,8 +979,7 @@ pub async fn install_package(pkg_name: &str) -> AppResult<String> {
 
 /// Met à jour un paquet officiel via `pkexec pacman -Sy --noconfirm`.
 pub async fn update_package(pkg_name: &str) -> AppResult<String> {
-    let output = Command::new("pkexec")
-        .env("LC_ALL", "C")
+    let output = build_pkexec_command()
         .stdin(Stdio::null())
         .args([
             "sh",
@@ -963,8 +1007,7 @@ pub async fn update_package(pkg_name: &str) -> AppResult<String> {
 
 /// Met à jour l'ensemble des paquets système via `pkexec pacman -Syu --noconfirm`.
 pub async fn update_all_system_packages() -> AppResult<String> {
-    let output = Command::new("pkexec")
-        .env("LC_ALL", "C")
+    let output = build_pkexec_command()
         .stdin(Stdio::null())
         .args([
             "sh",
@@ -993,8 +1036,7 @@ pub async fn update_all_system_packages() -> AppResult<String> {
 
 /// Désinstalle un paquet via `pkexec pacman -Rns --noconfirm`.
 pub async fn remove_package(pkg_name: &str) -> AppResult<String> {
-    let output = Command::new("pkexec")
-        .env("LC_ALL", "C")
+    let output = build_pkexec_command()
         .stdin(Stdio::null())
         .args([
             "sh",
@@ -1293,8 +1335,7 @@ pub async fn install_packages_streaming(
         })
         .await;
 
-    let mut child = Command::new("pkexec")
-        .env("LC_ALL", "C")
+    let mut child = build_pkexec_command()
         .stdin(Stdio::null())
         .args(["sh", "-c", PACMAN_UNLOCK_AND_EXEC_SCRIPT, "--"])
         .args(base_args)
@@ -1441,8 +1482,7 @@ pub async fn update_pacman_all_streaming(
         })
         .await;
 
-    let mut child = Command::new("pkexec")
-        .env("LC_ALL", "C")
+    let mut child = build_pkexec_command()
         .stdin(Stdio::null())
         .args([
             "sh",

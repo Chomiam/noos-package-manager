@@ -22,6 +22,11 @@ use crate::ui::row::{build_aur_columns_header_row, build_package_action_row};
 
 const MAX_RENDERED_ROWS: usize = 250;
 const AUR_PAGE_SIZE: usize = 8;
+const SIDEBAR_EXPANDED_MIN_WIDTH: f64 = 182.0;
+const SIDEBAR_EXPANDED_MAX_WIDTH: f64 = 200.0;
+const SIDEBAR_EXPANDED_FRACTION: f64 = 0.165;
+const SIDEBAR_COLLAPSED_WIDTH: f64 = 58.0;
+const SIDEBAR_COLLAPSED_FRACTION: f64 = 0.05;
 
 #[derive(Default)]
 struct AppUiState {
@@ -40,6 +45,15 @@ struct AppUiState {
     debounce_source: Option<glib::SourceId>,
     lock_dialog_open: bool,
     lock_dismissed_while_present: bool,
+    sidebar_collapsed: bool,
+}
+
+struct SidebarRowWidgets {
+    row: gtk4::ListBoxRow,
+    hbox: gtk4::Box,
+    icon: gtk4::Image,
+    title_label: gtk4::Label,
+    category: SidebarCategory,
 }
 
 struct CategoryBadgeWidgets {
@@ -50,6 +64,7 @@ struct CategoryBadgeWidgets {
     aur_label: gtk4::Label,
     flatpak_label: gtk4::Label,
     appimages_label: gtk4::Label,
+    sidebar_rows: Vec<SidebarRowWidgets>,
 }
 
 #[derive(Clone)]
@@ -76,18 +91,31 @@ pub fn build_main_window(app: &adw::Application) -> adw::ApplicationWindow {
     let toast_overlay = adw::ToastOverlay::new();
 
     let split_view = adw::NavigationSplitView::builder()
-        .min_sidebar_width(240.0)
-        .max_sidebar_width(300.0)
-        .sidebar_width_fraction(0.25)
+        .min_sidebar_width(SIDEBAR_EXPANDED_MIN_WIDTH)
+        .max_sidebar_width(SIDEBAR_EXPANDED_MAX_WIDTH)
+        .sidebar_width_fraction(SIDEBAR_EXPANDED_FRACTION)
         .build();
 
     // --- Construction de la Sidebar ---
     let sidebar_toolbar = adw::ToolbarView::new();
     let sidebar_header = adw::HeaderBar::builder()
+        .show_start_title_buttons(true)
         .show_end_title_buttons(false)
         .build();
-    let sidebar_title = adw::WindowTitle::new("Noos", "Gestionnaire Arch");
-    sidebar_header.set_title_widget(Some(&sidebar_title));
+
+    let sidebar_header_box = gtk4::Box::builder()
+        .orientation(gtk4::Orientation::Horizontal)
+        .hexpand(true)
+        .halign(gtk4::Align::End)
+        .build();
+
+    let sidebar_toggle_btn = gtk4::Button::builder()
+        .icon_name(resolve_sidebar_toggle_icon(false))
+        .tooltip_text("Réduire le volet latéral (afficher uniquement les icônes)")
+        .css_classes(["flat"])
+        .build();
+    sidebar_header_box.append(&sidebar_toggle_btn);
+    sidebar_header.set_title_widget(Some(&sidebar_header_box));
     sidebar_toolbar.add_top_bar(&sidebar_header);
 
     let sidebar_list = gtk4::ListBox::builder()
@@ -95,8 +123,8 @@ pub fn build_main_window(app: &adw::Application) -> adw::ApplicationWindow {
         .css_classes(["navigation-sidebar"])
         .margin_top(6)
         .margin_bottom(6)
-        .margin_start(6)
-        .margin_end(6)
+        .margin_start(4)
+        .margin_end(4)
         .build();
 
     let all_badge = create_sidebar_badge(false);
@@ -111,6 +139,7 @@ pub fn build_main_window(app: &adw::Application) -> adw::ApplicationWindow {
     flatpak_badge.set_visible(false);
     let appimages_badge = create_sidebar_badge(false);
 
+    let mut sidebar_rows = Vec::with_capacity(SidebarCategory::ALL.len());
     for category in SidebarCategory::ALL {
         let badge_ref = match category {
             SidebarCategory::All => &all_badge,
@@ -121,8 +150,9 @@ pub fn build_main_window(app: &adw::Application) -> adw::ApplicationWindow {
             SidebarCategory::Flatpak => &flatpak_badge,
             SidebarCategory::AppImages => &appimages_badge,
         };
-        let row = create_sidebar_row(category, badge_ref);
-        sidebar_list.append(&row);
+        let row_widgets = create_sidebar_row(category, badge_ref);
+        sidebar_list.append(&row_widgets.row);
+        sidebar_rows.push(row_widgets);
     }
 
     if let Some(first_row) = sidebar_list.row_at_index(0) {
@@ -137,7 +167,7 @@ pub fn build_main_window(app: &adw::Application) -> adw::ApplicationWindow {
     sidebar_toolbar.set_content(Some(&sidebar_scroll));
 
     let sidebar_page = adw::NavigationPage::builder()
-        .title("Catégories")
+        .title("Gestionnaire de paquets")
         .tag("sidebar")
         .child(&sidebar_toolbar)
         .build();
@@ -145,6 +175,21 @@ pub fn build_main_window(app: &adw::Application) -> adw::ApplicationWindow {
     // --- Construction de la Vue de Contenu ---
     let content_toolbar = adw::ToolbarView::new();
     let content_header = adw::HeaderBar::new();
+
+    let collapsed_window_controls = gtk4::WindowControls::builder()
+        .side(gtk4::PackType::Start)
+        .visible(false)
+        .build();
+    content_header.pack_start(&collapsed_window_controls);
+
+    let app_header_title = gtk4::Label::builder()
+        .label("Gestionnaire de paquets")
+        .valign(gtk4::Align::Center)
+        .margin_start(4)
+        .margin_end(6)
+        .css_classes(["heading"])
+        .build();
+    content_header.pack_start(&app_header_title);
 
     let search_entry = gtk4::SearchEntry::builder()
         .placeholder_text("Rechercher un paquet (Pacman, AUR, Flatpak, AppImage)…")
@@ -359,7 +404,44 @@ pub fn build_main_window(app: &adw::Application) -> adw::ApplicationWindow {
         aur_label: aur_badge,
         flatpak_label: flatpak_badge,
         appimages_label: appimages_badge,
+        sidebar_rows,
     });
+
+    // --- Connexion du bouton de réduction / dépliage du volet latéral gauche ---
+    {
+        let state_toggle = Rc::clone(&state);
+        let split_ref = split_view.clone();
+        let list_ref = sidebar_list.clone();
+        let sidebar_header_ref = sidebar_header.clone();
+        let sidebar_hbox_ref = sidebar_header_box.clone();
+        let collapsed_wc_ref = collapsed_window_controls;
+        let badges_ref = Rc::clone(&badge_widgets);
+
+        sidebar_toggle_btn.connect_clicked(move |btn| {
+            let (is_collapsed, updates_count) = {
+                let mut st = state_toggle.borrow_mut();
+                st.sidebar_collapsed = !st.sidebar_collapsed;
+                let upd = st
+                    .catalog_packages
+                    .iter()
+                    .filter(|p| p.update_available.is_some())
+                    .count();
+                (st.sidebar_collapsed, upd)
+            };
+
+            apply_sidebar_collapsed_state(
+                &split_ref,
+                &list_ref,
+                &sidebar_header_ref,
+                &sidebar_hbox_ref,
+                &collapsed_wc_ref,
+                btn,
+                &badges_ref,
+                is_collapsed,
+                updates_count,
+            );
+        });
+    }
 
     let header_actions = HeaderActionButtons {
         refresh_btn: refresh_btn.clone(),
@@ -1244,6 +1326,93 @@ fn update_selection_buttons(
     actions.clear_selection_btn.set_visible(count > 0);
 }
 
+fn resolve_sidebar_toggle_icon(collapsed: bool) -> &'static str {
+    let preferred = if collapsed {
+        "pane-show-symbolic"
+    } else {
+        "pane-hide-symbolic"
+    };
+    if let Some(display) = gtk4::gdk::Display::default() {
+        let theme = gtk4::IconTheme::for_display(&display);
+        if theme.has_icon(preferred) {
+            return preferred;
+        }
+    }
+    "sidebar-show-symbolic"
+}
+
+#[allow(clippy::too_many_arguments)]
+fn apply_sidebar_collapsed_state(
+    split_view: &adw::NavigationSplitView,
+    sidebar_list: &gtk4::ListBox,
+    sidebar_header: &adw::HeaderBar,
+    sidebar_header_box: &gtk4::Box,
+    collapsed_window_controls: &gtk4::WindowControls,
+    sidebar_toggle_btn: &gtk4::Button,
+    badges: &CategoryBadgeWidgets,
+    is_collapsed: bool,
+    updates_count: usize,
+) {
+    if is_collapsed {
+        sidebar_header.set_show_start_title_buttons(false);
+        sidebar_header_box.set_hexpand(false);
+        sidebar_header_box.set_halign(gtk4::Align::Center);
+        collapsed_window_controls.set_visible(!collapsed_window_controls.is_empty());
+        sidebar_toggle_btn.set_icon_name(resolve_sidebar_toggle_icon(true));
+        sidebar_toggle_btn
+            .set_tooltip_text(Some("Déplier le volet latéral (afficher les libellés)"));
+
+        sidebar_list.set_margin_start(4);
+        sidebar_list.set_margin_end(4);
+
+        for rw in &badges.sidebar_rows {
+            rw.title_label.set_visible(false);
+            rw.hbox.set_halign(gtk4::Align::Center);
+            rw.hbox.set_spacing(0);
+            rw.hbox.set_margin_start(4);
+            rw.hbox.set_margin_end(4);
+            rw.icon.set_halign(gtk4::Align::Center);
+        }
+
+        badges.installed_label.set_visible(false);
+        badges.updates_label.set_visible(false);
+        badges.appimages_label.set_visible(false);
+
+        split_view.set_min_sidebar_width(SIDEBAR_COLLAPSED_WIDTH);
+        split_view.set_max_sidebar_width(SIDEBAR_COLLAPSED_WIDTH);
+        split_view.set_sidebar_width_fraction(SIDEBAR_COLLAPSED_FRACTION);
+    } else {
+        split_view.set_max_sidebar_width(SIDEBAR_EXPANDED_MAX_WIDTH);
+        split_view.set_min_sidebar_width(SIDEBAR_EXPANDED_MIN_WIDTH);
+        split_view.set_sidebar_width_fraction(SIDEBAR_EXPANDED_FRACTION);
+
+        collapsed_window_controls.set_visible(false);
+        sidebar_header.set_show_start_title_buttons(true);
+        sidebar_header_box.set_hexpand(true);
+        sidebar_header_box.set_halign(gtk4::Align::End);
+        sidebar_toggle_btn.set_icon_name(resolve_sidebar_toggle_icon(false));
+        sidebar_toggle_btn.set_tooltip_text(Some(
+            "Réduire le volet latéral (afficher uniquement les icônes)",
+        ));
+
+        sidebar_list.set_margin_start(4);
+        sidebar_list.set_margin_end(4);
+
+        for rw in &badges.sidebar_rows {
+            rw.title_label.set_visible(true);
+            rw.hbox.set_halign(gtk4::Align::Fill);
+            rw.hbox.set_spacing(6);
+            rw.hbox.set_margin_start(4);
+            rw.hbox.set_margin_end(2);
+            rw.icon.set_halign(gtk4::Align::Start);
+        }
+
+        badges.installed_label.set_visible(true);
+        badges.updates_label.set_visible(updates_count > 0);
+        badges.appimages_label.set_visible(true);
+    }
+}
+
 fn create_sidebar_badge(is_update_badge: bool) -> gtk4::Label {
     let label = gtk4::Label::new(Some("0"));
     label.set_valign(gtk4::Align::Center);
@@ -1256,29 +1425,56 @@ fn create_sidebar_badge(is_update_badge: bool) -> gtk4::Label {
     label
 }
 
-fn create_sidebar_row(category: SidebarCategory, badge: &gtk4::Label) -> gtk4::ListBoxRow {
+fn create_sidebar_row(category: SidebarCategory, badge: &gtk4::Label) -> SidebarRowWidgets {
     let hbox = gtk4::Box::builder()
         .orientation(gtk4::Orientation::Horizontal)
-        .spacing(12)
-        .margin_top(8)
-        .margin_bottom(8)
-        .margin_start(10)
-        .margin_end(10)
+        .spacing(6)
+        .margin_top(7)
+        .margin_bottom(7)
+        .margin_start(4)
+        .margin_end(2)
         .build();
 
-    let icon = gtk4::Image::from_icon_name(category.icon_name());
+    let resolved_icon = if matches!(category, SidebarCategory::Flatpak) {
+        if let Some(display) = gtk4::gdk::Display::default() {
+            let theme = gtk4::IconTheme::for_display(&display);
+            if theme.has_icon("flatpak-symbolic") {
+                "flatpak-symbolic"
+            } else {
+                category.icon_name()
+            }
+        } else {
+            category.icon_name()
+        }
+    } else {
+        category.icon_name()
+    };
+
+    let icon = gtk4::Image::from_icon_name(resolved_icon);
     hbox.append(&icon);
 
     let title_label = gtk4::Label::builder()
         .label(category.title())
         .xalign(0.0)
         .hexpand(true)
+        .ellipsize(gtk4::pango::EllipsizeMode::End)
         .build();
     hbox.append(&title_label);
 
     hbox.append(badge);
 
-    gtk4::ListBoxRow::builder().child(&hbox).build()
+    let row = gtk4::ListBoxRow::builder()
+        .child(&hbox)
+        .tooltip_text(category.title())
+        .build();
+
+    SidebarRowWidgets {
+        row,
+        hbox,
+        icon,
+        title_label,
+        category,
+    }
 }
 
 fn make_row_with_selection(
@@ -1546,12 +1742,16 @@ fn rebuild_package_list_ui(
         )
     };
 
+    let sidebar_collapsed = state_rc.borrow().sidebar_collapsed;
     let (c_all, c_installed, c_updates, c_pacman, c_aur, c_flatpak, c_appimage) = total_counts;
     badges.all_label.set_label(&c_all.to_string());
     badges.all_label.set_visible(false);
     badges.installed_label.set_label(&c_installed.to_string());
+    badges.installed_label.set_visible(!sidebar_collapsed);
     badges.updates_label.set_label(&c_updates.to_string());
-    badges.updates_label.set_visible(c_updates > 0);
+    badges
+        .updates_label
+        .set_visible(!sidebar_collapsed && c_updates > 0);
     badges.pacman_label.set_label(&c_pacman.to_string());
     badges.pacman_label.set_visible(false);
     badges.aur_label.set_label(&c_aur.to_string());
@@ -1559,6 +1759,19 @@ fn rebuild_package_list_ui(
     badges.flatpak_label.set_label(&c_flatpak.to_string());
     badges.flatpak_label.set_visible(false);
     badges.appimages_label.set_label(&c_appimage.to_string());
+    badges.appimages_label.set_visible(!sidebar_collapsed);
+
+    for rw in &badges.sidebar_rows {
+        let tip = match rw.category {
+            SidebarCategory::Installed => format!("{} ({c_installed})", rw.category.title()),
+            SidebarCategory::Updates if c_updates > 0 => {
+                format!("{} ({c_updates})", rw.category.title())
+            }
+            SidebarCategory::AppImages => format!("{} ({c_appimage})", rw.category.title()),
+            _ => rw.category.title().to_string(),
+        };
+        rw.row.set_tooltip_text(Some(&tip));
+    }
 
     actions.update_all_btn.set_visible(c_updates > 0);
     actions

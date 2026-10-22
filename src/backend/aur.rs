@@ -508,15 +508,52 @@ async fn is_version_newer(installed: &str, candidate: &str) -> bool {
     candidate != installed
 }
 
+fn build_aur_helper_command(bin: &str) -> Command {
+    if crate::backend::pacman::has_no_new_privileges()
+        && Path::new("/usr/bin/systemd-run").exists()
+    {
+        let mut cmd = Command::new("systemd-run");
+        cmd.args([
+            "--user",
+            "--pipe",
+            "--wait",
+            "--quiet",
+            "--collect",
+            "--setenv=LC_ALL=C",
+            "--setenv=PACMAN_AUTH=pkexec",
+        ]);
+        for var in [
+            "DISPLAY",
+            "WAYLAND_DISPLAY",
+            "XAUTHORITY",
+            "XDG_RUNTIME_DIR",
+            "DBUS_SESSION_BUS_ADDRESS",
+            "HOME",
+            "USER",
+            "PATH",
+        ] {
+            if let Ok(val) = env::var(var) {
+                if !val.is_empty() {
+                    cmd.arg(format!("--setenv={var}={val}"));
+                }
+            }
+        }
+        cmd.arg(bin);
+        cmd
+    } else {
+        let mut cmd = Command::new(bin);
+        cmd.env("LC_ALL", "C").env("PACMAN_AUTH", "pkexec");
+        cmd
+    }
+}
+
 /// Installe ou met à jour un paquet AUR via `yay`.
 pub async fn install_or_update_aur_package(pkg_name: &str) -> AppResult<String> {
     let helper = detect_aur_helper().ok_or(AppError::AurHelperNotFound)?;
     let bin = helper.binary_name();
 
-    let mut cmd = Command::new(bin);
-    cmd.env("LC_ALL", "C")
-        .env("PACMAN_AUTH", "pkexec")
-        .stdin(Stdio::null())
+    let mut cmd = build_aur_helper_command(bin);
+    cmd.stdin(Stdio::null())
         .args(["-S", "--aur", "--noconfirm", "--needed", "--sudo", "pkexec"]);
     if matches!(helper, AurHelper::Yay) {
         cmd.args([
@@ -636,10 +673,8 @@ pub async fn install_aur_packages_streaming(
         })
         .await;
 
-    let mut cmd = Command::new(bin);
-    cmd.env("LC_ALL", "C")
-        .env("PACMAN_AUTH", "pkexec")
-        .stdin(Stdio::null())
+    let mut cmd = build_aur_helper_command(bin);
+    cmd.stdin(Stdio::null())
         .args(["-S", "--aur", "--noconfirm", "--sudo", "pkexec"]);
     if matches!(helper, AurHelper::Yay) {
         cmd.args([

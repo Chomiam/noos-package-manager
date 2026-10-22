@@ -29,18 +29,18 @@ pub const APP_CSS: &str = r#"
 }
 
 .update-badge {
-    padding: 2px 9px;
+    padding: 1px 7px;
     border-radius: 999px;
-    font-size: 0.80em;
+    font-size: 0.76em;
     font-weight: 700;
     background-color: @accent_bg_color;
     color: @accent_fg_color;
 }
 
 .sidebar-count-badge {
-    padding: 1px 8px;
+    padding: 1px 6px;
     border-radius: 999px;
-    font-size: 0.78em;
+    font-size: 0.75em;
     font-weight: 600;
     background-color: alpha(@window_fg_color, 0.10);
 }

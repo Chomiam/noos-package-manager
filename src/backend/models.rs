@@ -514,7 +514,7 @@ impl SidebarCategory {
             Self::Updates => "software-update-available-symbolic",
             Self::Pacman => "package-x-generic-symbolic",
             Self::Aur => "system-software-install-symbolic",
-            Self::Flatpak => "package-x-generic-symbolic",
+            Self::Flatpak => "application-x-addon-symbolic",
             Self::AppImages => "application-x-executable-symbolic",
         }
     }
