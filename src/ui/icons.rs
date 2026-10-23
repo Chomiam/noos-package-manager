@@ -6,7 +6,8 @@ use std::sync::OnceLock;
 
 use gtk4::gdk;
 
-use crate::backend::models::PackageItem;
+use crate::backend::appimage::{appimage_desktop_icon_reference, expected_extracted_icon_paths};
+use crate::backend::models::{PackageItem, PackageSource};
 
 struct IconResolverIndex {
     /// Table `nom_icone_minuscule -> chemin_fichier_svg_ou_png`
@@ -102,6 +103,7 @@ fn candidate_icon_directories() -> Vec<PathBuf> {
                 .join("scalable"),
         );
         dirs.push(user_icons.join("hicolor").join("scalable").join("apps"));
+        dirs.push(user_icons.join("hicolor").join("256x256").join("apps"));
         dirs.push(user_icons.join("hicolor").join("128x128").join("apps"));
         dirs.push(user_icons.join("hicolor").join("48x48").join("apps"));
 
@@ -331,6 +333,27 @@ fn generate_candidate_keys(pkg_name: &str) -> Vec<String> {
 pub fn build_package_icon_widget(item: &PackageItem) -> gtk4::Image {
     let index = get_icon_index();
     let mut candidates = Vec::new();
+
+    // Icône embarquée des AppImages : chemin absolu du raccourci `.desktop` ou fichier extrait.
+    if let PackageSource::AppImage(path) = &item.source {
+        if let Some(icon_ref) = appimage_desktop_icon_reference(path) {
+            let icon_path = Path::new(&icon_ref);
+            if icon_path.is_absolute() && icon_path.is_file() {
+                let img = gtk4::Image::from_file(icon_path);
+                img.set_pixel_size(36);
+                return img;
+            }
+            candidates.push(icon_ref.to_lowercase());
+        }
+        for icon_path in expected_extracted_icon_paths(path) {
+            if icon_path.is_file() {
+                let img = gtk4::Image::from_file(&icon_path);
+                img.set_pixel_size(36);
+                return img;
+            }
+        }
+    }
+
     if let Some(app_id) = item.flatpak_app_id() {
         let low_id = app_id.to_lowercase();
         candidates.push(low_id.clone());

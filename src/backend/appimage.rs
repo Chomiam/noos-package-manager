@@ -13,6 +13,10 @@ use crate::backend::details::resolve_github_owner_repo;
 use crate::backend::models::{AppImageMetadata, PackageItem, PackageSource};
 use crate::error::{AppError, AppResult};
 
+/// Version du format des raccourcis `.desktop` générés par Noos.
+/// Permet de régénérer automatiquement les anciens raccourcis (icône manquante, métadonnées incomplètes).
+const SHORTCUT_VERSION: &str = "2";
+
 /// Retourne le chemin du dossier principal `~/Applications` et le crée automatiquement s'il n'existe pas.
 pub fn ensure_applications_directory() -> AppResult<PathBuf> {
     let Some(home_os) = env::var_os("HOME") else {
@@ -27,24 +31,89 @@ pub fn ensure_applications_directory() -> AppResult<PathBuf> {
     Ok(apps_dir)
 }
 
-/// Retourne le dossier `~/.local/share/applications` pour les raccourcis du menu démarrer.
-pub fn user_applications_menu_dir() -> Option<PathBuf> {
+/// Retourne le dossier `~/.local/share/icons/hicolor/{subdir}/apps` sans le créer.
+fn user_hicolor_apps_dir_path(subdir: &str) -> Option<PathBuf> {
     let home = PathBuf::from(env::var_os("HOME")?);
-    let dir = home.join(".local").join("share").join("applications");
+    Some(
+        home.join(".local")
+            .join("share")
+            .join("icons")
+            .join("hicolor")
+            .join(subdir)
+            .join("apps"),
+    )
+}
+
+/// Retourne le dossier `~/.local/share/icons/hicolor/{subdir}/apps` et le crée si nécessaire.
+fn user_hicolor_apps_dir(subdir: &str) -> Option<PathBuf> {
+    let dir = user_hicolor_apps_dir_path(subdir)?;
     let _ = fs::create_dir_all(&dir);
     Some(dir)
 }
 
-/// Retourne le dossier `~/.local/share/icons/hicolor/128x128/apps` pour les icônes extraites d'AppImages.
-pub fn user_extracted_icons_dir() -> Option<PathBuf> {
+/// Retourne le chemin cible d'une icône extraite pour un slug donné (`256x256` pour PNG, `scalable` pour SVG).
+pub fn user_extracted_icon_path(slug: &str, ext: &str) -> Option<PathBuf> {
+    let subdir = if ext.eq_ignore_ascii_case("svg") {
+        "scalable"
+    } else {
+        "256x256"
+    };
+    Some(user_hicolor_apps_dir(subdir)?.join(format!("noos-appimage-{slug}.{ext}")))
+}
+
+/// Liste les chemins où l'icône extraite d'une AppImage peut se trouver (formats et tailles courants).
+pub fn expected_extracted_icon_paths(appimage_path: &Path) -> Vec<PathBuf> {
+    let Some(file_name) = appimage_path.file_name().and_then(|n| n.to_str()) else {
+        return Vec::new();
+    };
+    let (deduced_name, _) = deduce_name_and_version(file_name);
+    let slug = slugify_appimage_name(&deduced_name);
+
+    let mut paths = Vec::with_capacity(6);
+    for subdir in ["256x256", "128x128", "scalable"] {
+        let Some(base) = user_hicolor_apps_dir_path(subdir) else {
+            return paths;
+        };
+        for ext in ["png", "svg"] {
+            paths.push(base.join(format!("noos-appimage-{slug}.{ext}")));
+        }
+    }
+    paths
+}
+
+/// Recherche le raccourci `.desktop` géré par Noos pour une AppImage donnée.
+fn find_managed_desktop_shortcut(appimage_path: &Path) -> Option<PathBuf> {
+    let menu_dir = user_applications_menu_dir()?;
+    let abs_path = fs::canonicalize(appimage_path).unwrap_or_else(|_| appimage_path.to_path_buf());
+    let abs_str = abs_path.to_string_lossy();
+    let raw_str = appimage_path.to_string_lossy();
+
+    for entry_res in fs::read_dir(menu_dir).ok()?.flatten() {
+        let p = entry_res.path();
+        if p.extension().and_then(|e| e.to_str()) != Some("desktop") {
+            continue;
+        }
+        let Ok(content) = fs::read_to_string(&p) else {
+            continue;
+        };
+        if content.contains(abs_str.as_ref()) || content.contains(raw_str.as_ref()) {
+            return Some(p);
+        }
+    }
+    None
+}
+
+/// Retourne la valeur du champ `Icon=` du raccourci `.desktop` géré par Noos pour cette AppImage.
+pub fn appimage_desktop_icon_reference(appimage_path: &Path) -> Option<String> {
+    let shortcut = find_managed_desktop_shortcut(appimage_path)?;
+    let content = fs::read_to_string(shortcut).ok()?;
+    parse_desktop_entry_content(&content).2
+}
+
+/// Retourne le dossier `~/.local/share/applications` pour les raccourcis du menu démarrer.
+pub fn user_applications_menu_dir() -> Option<PathBuf> {
     let home = PathBuf::from(env::var_os("HOME")?);
-    let dir = home
-        .join(".local")
-        .join("share")
-        .join("icons")
-        .join("hicolor")
-        .join("128x128")
-        .join("apps");
+    let dir = home.join(".local").join("share").join("applications");
     let _ = fs::create_dir_all(&dir);
     Some(dir)
 }
@@ -298,19 +367,9 @@ fn extract_desktop_metadata(
     }
 
     // 3. Vérifier dans `~/.local/share/applications` si un raccourci géré par Noos existe
-    if let Some(menu_dir) = user_applications_menu_dir() {
-        let path_str = appimage_path.to_string_lossy();
-        if let Ok(entries) = fs::read_dir(menu_dir) {
-            for entry_res in entries.flatten() {
-                let p = entry_res.path();
-                if p.extension().and_then(|e| e.to_str()) == Some("desktop") {
-                    if let Ok(content) = fs::read_to_string(&p) {
-                        if content.contains(path_str.as_ref()) {
-                            return parse_desktop_entry_content(&content);
-                        }
-                    }
-                }
-            }
+    if let Some(shortcut) = find_managed_desktop_shortcut(appimage_path) {
+        if let Ok(content) = fs::read_to_string(&shortcut) {
+            return parse_desktop_entry_content(&content);
         }
     }
 
@@ -319,24 +378,35 @@ fn extract_desktop_metadata(
 
 /// Vérifie si un raccourci `.desktop` existe dans `~/.local/share/applications` pour cette AppImage.
 pub fn has_desktop_shortcut(appimage_path: &Path) -> bool {
-    let Some(menu_dir) = user_applications_menu_dir() else {
-        return false;
+    find_managed_desktop_shortcut(appimage_path).is_some()
+}
+
+/// Indique si le raccourci `.desktop` d'une AppImage doit être régénéré :
+/// absent, généré par une ancienne version, ou pointant vers une icône supprimée.
+pub fn desktop_shortcut_needs_refresh(appimage_path: &Path) -> bool {
+    let Some(shortcut) = find_managed_desktop_shortcut(appimage_path) else {
+        return true;
     };
-    let path_str = appimage_path.to_string_lossy();
-    let Ok(entries) = fs::read_dir(menu_dir) else {
-        return false;
+    let Ok(content) = fs::read_to_string(shortcut) else {
+        return true;
     };
-    for entry_res in entries.flatten() {
-        let p = entry_res.path();
-        if p.extension().and_then(|e| e.to_str()) == Some("desktop") {
-            if let Ok(content) = fs::read_to_string(&p) {
-                if content.contains(path_str.as_ref()) {
-                    return true;
-                }
-            }
-        }
+
+    let has_current_version = content.lines().any(|line| {
+        line.trim()
+            .strip_prefix("X-Noos-Shortcut-Version=")
+            .is_some_and(|value| value.trim() == SHORTCUT_VERSION)
+    });
+    if !has_current_version {
+        return true;
     }
-    false
+
+    match parse_desktop_entry_content(&content).2 {
+        Some(icon) => {
+            let icon_path = Path::new(&icon);
+            icon_path.is_absolute() && !icon_path.is_file()
+        }
+        None => true,
+    }
 }
 
 /// Crée ou met à jour le raccourci `.desktop` dans le menu démarrer (`~/.local/share/applications`)
@@ -363,6 +433,12 @@ pub fn create_or_update_desktop_shortcut(appimage_path: &Path) -> AppResult<Path
         .or(adj_comment)
         .unwrap_or_else(|| format!("Application portable AppImage ({final_name})"));
     let final_icon = extracted_icon_path
+        .or_else(|| {
+            expected_extracted_icon_paths(appimage_path)
+                .into_iter()
+                .find(|path| path.is_file())
+                .map(|path| path.to_string_lossy().to_string())
+        })
         .or(adj_icon)
         .unwrap_or_else(|| slug.clone());
 
@@ -389,6 +465,7 @@ pub fn create_or_update_desktop_shortcut(appimage_path: &Path) -> AppResult<Path
          Categories=Utility;Application;\n\
          StartupNotify=true\n\
          X-AppImage-Version={final_version}\n\
+         X-Noos-Shortcut-Version={SHORTCUT_VERSION}\n\
          X-Noos-Managed-AppImage={abs_str}\n"
     );
 
@@ -404,6 +481,174 @@ pub fn create_or_update_desktop_shortcut(appimage_path: &Path) -> AppResult<Path
     Ok(desktop_file_path)
 }
 
+/// Lance `--appimage-extract` sur un motif donné dans le dossier de travail.
+fn run_appimage_extract(appimage_path: &Path, workdir: &Path, pattern: &str) {
+    let _ = std::process::Command::new(appimage_path)
+        .arg("--appimage-extract")
+        .arg(pattern)
+        .current_dir(workdir)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
+}
+
+/// Normalise lexicalement un chemin (supprime `.` et résout `..`).
+fn normalize_path(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                out.pop();
+            }
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
+}
+
+/// Suit les liens symboliques d'une entrée extraite du SquashFS et extrait sa cible si nécessaire.
+/// Les AppImages embarquent souvent `.DirIcon` et le `.desktop` racine sous forme de liens
+/// symboliques : `--appimage-extract <lien>` ne crée que le lien, pas le fichier cible.
+fn materialize_extracted_entry(
+    appimage_path: &Path,
+    workdir: &Path,
+    squash_root: &Path,
+    entry: &Path,
+) -> Option<PathBuf> {
+    let mut current = normalize_path(entry);
+
+    for _ in 0..8 {
+        let metadata = fs::symlink_metadata(&current).ok()?;
+        if metadata.file_type().is_symlink() {
+            let target = fs::read_link(&current).ok()?;
+            let next = if target.is_absolute() {
+                squash_root.join(target.strip_prefix("/").ok()?)
+            } else {
+                current.parent().unwrap_or(squash_root).join(target)
+            };
+            let next = normalize_path(&next);
+            if !next.starts_with(squash_root) {
+                return None;
+            }
+            if fs::symlink_metadata(&next).is_err() {
+                let relative = next.strip_prefix(squash_root).ok()?;
+                run_appimage_extract(appimage_path, workdir, relative.to_str()?);
+            }
+            if fs::symlink_metadata(&next).is_err() {
+                return None;
+            }
+            current = next;
+        } else if metadata.is_file() {
+            return Some(current);
+        } else {
+            return None;
+        }
+    }
+
+    None
+}
+
+/// Ajoute à `out` les fichiers `.desktop` présents directement dans `dir`.
+fn collect_desktop_entries(dir: &Path, out: &mut Vec<PathBuf>) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) == Some("desktop") {
+            out.push(path);
+        }
+    }
+}
+
+/// Recherche l'icône désignée par le champ `Icon=` du `.desktop` embarqué, lorsque `.DirIcon` est absent.
+fn find_embedded_icon_by_name(
+    appimage_path: &Path,
+    workdir: &Path,
+    squash_root: &Path,
+    icon_name: &str,
+) -> Option<PathBuf> {
+    let icon_name = icon_name.trim();
+    if icon_name.is_empty() || icon_name.contains("..") {
+        return None;
+    }
+
+    let has_extension = Path::new(icon_name).extension().is_some();
+    let mut direct_names = Vec::with_capacity(2);
+    if has_extension {
+        direct_names.push(icon_name.to_string());
+    } else {
+        direct_names.push(format!("{icon_name}.png"));
+        direct_names.push(format!("{icon_name}.svg"));
+    }
+
+    for name in &direct_names {
+        run_appimage_extract(appimage_path, workdir, name);
+        let entry = squash_root.join(name);
+        if let Some(real_path) =
+            materialize_extracted_entry(appimage_path, workdir, squash_root, &entry)
+        {
+            if real_path.is_file() {
+                return Some(real_path);
+            }
+        }
+    }
+
+    if !icon_name.contains('/') && !has_extension {
+        for subdir in ["scalable", "256x256", "128x128", "64x64", "48x48"] {
+            for ext in ["png", "svg"] {
+                let relative = format!("usr/share/icons/hicolor/{subdir}/apps/{icon_name}.{ext}");
+                run_appimage_extract(appimage_path, workdir, &relative);
+                let entry = squash_root.join(&relative);
+                if let Some(real_path) =
+                    materialize_extracted_entry(appimage_path, workdir, squash_root, &entry)
+                {
+                    if real_path.is_file() {
+                        return Some(real_path);
+                    }
+                }
+            }
+        }
+    }
+
+    None
+}
+
+/// Enregistre les octets d'une icône extraite dans `~/.local/share/icons/hicolor/.../apps`.
+fn save_extracted_icon(source: &Path, slug: &str) -> Option<String> {
+    let bytes = fs::read(source).ok()?;
+    if bytes.is_empty() {
+        return None;
+    }
+
+    let source_ext = source
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or_default();
+    let ext = if source_ext.eq_ignore_ascii_case("svg")
+        || bytes.starts_with(b"<svg")
+        || bytes.starts_with(b"<?xml")
+    {
+        "svg"
+    } else if source_ext.eq_ignore_ascii_case("png") || bytes.starts_with(b"\x89PNG") {
+        "png"
+    } else {
+        return None;
+    };
+
+    for stale_ext in ["png", "svg"] {
+        if let Some(stale) = user_extracted_icon_path(slug, stale_ext) {
+            let _ = fs::remove_file(stale);
+        }
+    }
+
+    let target_icon = user_extracted_icon_path(slug, ext)?;
+    fs::write(&target_icon, &bytes).ok()?;
+    Some(target_icon.to_string_lossy().to_string())
+}
+
 /// Tente d'extraire `.DirIcon` et `*.desktop` d'une AppImage Type 2 dans un dossier temporaire.
 fn try_extract_embedded_appimage_assets(
     appimage_path: &Path,
@@ -417,69 +662,65 @@ fn try_extract_embedded_appimage_assets(
     let Ok(temp_dir) = tempfile::TempDir::new() else {
         return (None, None, None, None);
     };
+    let workdir = temp_dir.path();
 
-    // Extraction du fichier .desktop embarqué à la racine du SquashFS
-    let _ = std::process::Command::new(appimage_path)
-        .arg("--appimage-extract")
-        .arg("*.desktop")
-        .current_dir(temp_dir.path())
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status();
+    // Extraction du fichier .desktop embarqué à la racine du SquashFS et de l'icône du dossier
+    run_appimage_extract(appimage_path, workdir, "*.desktop");
+    run_appimage_extract(appimage_path, workdir, ".DirIcon");
 
-    let _ = std::process::Command::new(appimage_path)
-        .arg("--appimage-extract")
-        .arg(".DirIcon")
-        .current_dir(temp_dir.path())
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status();
-
-    let squash_root = temp_dir.path().join("squashfs-root");
+    let squash_root = workdir.join("squashfs-root");
     if !squash_root.is_dir() {
         return (None, None, None, None);
     }
 
+    let mut desktop_entries = Vec::new();
+    collect_desktop_entries(&squash_root, &mut desktop_entries);
+    if desktop_entries.is_empty() {
+        run_appimage_extract(appimage_path, workdir, "usr/share/applications/*.desktop");
+        collect_desktop_entries(
+            &squash_root.join("usr/share/applications"),
+            &mut desktop_entries,
+        );
+    }
+
     let mut parsed_name = None;
     let mut parsed_comment = None;
+    let mut parsed_icon_name = None;
     let mut parsed_ver = None;
 
-    if let Ok(entries) = fs::read_dir(&squash_root) {
-        for entry in entries.flatten() {
-            let p = entry.path();
-            if p.extension().and_then(|e| e.to_str()) == Some("desktop") {
-                if let Ok(content) = fs::read_to_string(&p) {
-                    let (n, c, _, v) = parse_desktop_entry_content(&content);
-                    parsed_name = n;
-                    parsed_comment = c;
-                    parsed_ver = v;
-                    break;
-                }
-            }
+    for entry in desktop_entries {
+        let Some(real_path) =
+            materialize_extracted_entry(appimage_path, workdir, &squash_root, &entry)
+        else {
+            continue;
+        };
+        let Ok(content) = fs::read_to_string(&real_path) else {
+            continue;
+        };
+        let (name, comment, icon, version) = parse_desktop_entry_content(&content);
+        if name.is_none() && comment.is_none() && icon.is_none() && version.is_none() {
+            continue;
+        }
+        parsed_name = name;
+        parsed_comment = comment;
+        parsed_icon_name = icon;
+        parsed_ver = version;
+        if parsed_name.is_some() {
+            break;
         }
     }
 
-    let mut saved_icon_path = None;
-    let dir_icon = squash_root.join(".DirIcon");
-    if dir_icon.exists() {
-        if let Ok(bytes) = fs::read(&dir_icon) {
-            if !bytes.is_empty() {
-                let ext = if bytes.starts_with(b"<svg") || bytes.starts_with(b"<?xml") {
-                    "svg"
-                } else {
-                    "png"
-                };
-                if let Some(icons_dir) = user_extracted_icons_dir() {
-                    let target_icon = icons_dir.join(format!("noos-appimage-{slug}.{ext}"));
-                    if fs::write(&target_icon, &bytes).is_ok() {
-                        saved_icon_path = Some(target_icon.to_string_lossy().to_string());
-                    }
-                }
-            }
-        }
-    }
+    let dir_icon_entry = squash_root.join(".DirIcon");
+    let icon_source =
+        materialize_extracted_entry(appimage_path, workdir, &squash_root, &dir_icon_entry).or_else(
+            || {
+                parsed_icon_name.as_deref().and_then(|icon_name| {
+                    find_embedded_icon_by_name(appimage_path, workdir, &squash_root, icon_name)
+                })
+            },
+        );
+
+    let saved_icon_path = icon_source.and_then(|source| save_extracted_icon(&source, slug));
 
     (parsed_name, parsed_comment, saved_icon_path, parsed_ver)
 }
@@ -667,7 +908,7 @@ pub fn scan_default_directories() -> AppResult<Vec<PackageItem>> {
         for item in &mut items {
             if let PackageSource::AppImage(ref path) = item.source {
                 if path.starts_with(main_apps_dir)
-                    && !has_desktop_shortcut(path)
+                    && desktop_shortcut_needs_refresh(path)
                     && create_or_update_desktop_shortcut(path).is_ok()
                 {
                     if let Ok(refreshed) = inspect_appimage(path) {
@@ -732,6 +973,29 @@ pub fn execute_appimage(path: &Path) -> AppResult<String> {
     }
 }
 
+/// Supprime les icônes extraites associées à une AppImage (uniquement dans `~/.local/share/icons`).
+fn remove_extracted_icon(appimage_path: &Path) {
+    let user_icons_root = env::var_os("HOME").map(|home| {
+        PathBuf::from(home)
+            .join(".local")
+            .join("share")
+            .join("icons")
+    });
+
+    if let Some(icon) = appimage_desktop_icon_reference(appimage_path) {
+        let icon_path = Path::new(&icon);
+        if let Some(ref root) = user_icons_root {
+            if icon_path.is_absolute() && icon_path.starts_with(root) {
+                let _ = fs::remove_file(icon_path);
+            }
+        }
+    }
+
+    for icon_path in expected_extracted_icon_paths(appimage_path) {
+        let _ = fs::remove_file(icon_path);
+    }
+}
+
 /// Supprime un fichier AppImage du disque ainsi que son raccourci `.desktop` dans le menu démarrer.
 pub fn remove_appimage(path: &Path) -> AppResult<String> {
     if !path.exists() {
@@ -753,6 +1017,7 @@ pub fn remove_appimage(path: &Path) -> AppResult<String> {
         .to_string();
     let raw_str = path.to_string_lossy().to_string();
 
+    remove_extracted_icon(path);
     fs::remove_file(path)?;
 
     // Suppression des raccourcis .desktop associés dans ~/.local/share/applications
