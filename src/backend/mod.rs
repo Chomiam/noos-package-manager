@@ -3,6 +3,7 @@ pub mod aur;
 pub mod cache;
 pub mod details;
 pub mod flatpak;
+pub mod logging;
 pub mod models;
 pub mod pacman;
 
@@ -12,12 +13,13 @@ mod tests;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
-use crate::backend::aur::AurClient;
+use crate::backend::aur::{init_shared_aur_client, shared_aur_client};
+use crate::backend::logging::log_warn;
 use crate::backend::models::{
     AurHelper, DependencyStatus, DependencyStepItem, InstallCancelHandle, OptionalDependencyItem,
     PackageItem, PackageSource, RecommendationCategory,
 };
-use crate::error::AppResult;
+use crate::error::{AppError, AppResult};
 use crate::ui::messages::UiEvent;
 
 pub const SELF_PACKAGE_NAME: &str = "noos-package-manager";
@@ -44,6 +46,11 @@ pub async fn load_system_catalog() -> AppResult<CatalogSnapshot> {
 pub async fn load_system_catalog_with_options(force_sync: bool) -> AppResult<CatalogSnapshot> {
     let mut warnings = Vec::new();
     let aur_helper = aur::detect_aur_helper();
+
+    // Initialise le client HTTP AUR partagé (une seule fois pour toute la durée du processus).
+    if let Err(e) = init_shared_aur_client() {
+        log_warn("aur", format!("Impossible d'initialiser le client AUR partagé : {e}"));
+    }
 
     let (pacman_upd_res, aur_upd_res) = tokio::join!(
         pacman::check_updates_map_with_mode(force_sync),
@@ -158,7 +165,7 @@ pub async fn load_system_catalog_with_options(force_sync: bool) -> AppResult<Cat
     }
 
     if !aur_query_names.is_empty() {
-        if let Ok(aur_client) = AurClient::new() {
+        if let Some(aur_client) = shared_aur_client() {
             let refs: Vec<&str> = aur_query_names.iter().map(String::as_str).collect();
             match aur_client
                 .fetch_enriched_aur_items(&refs, &foreign_installed_versions)
@@ -370,7 +377,7 @@ pub async fn apply_incremental_catalog_diff(
     packages.extend(diff_plan.retained_showcase);
 
     if !aur_missing_names.is_empty() {
-        if let Ok(aur_client) = AurClient::new() {
+        if let Some(aur_client) = shared_aur_client() {
             let refs: Vec<&str> = aur_missing_names.iter().map(String::as_str).collect();
             if let Ok(enriched_aur) = aur_client
                 .fetch_enriched_aur_items(&refs, &foreign_installed_versions)
@@ -587,7 +594,7 @@ pub async fn refresh_catalog_updates(
         .filter(|pkg| matches!(pkg.source, PackageSource::Aur) && !pkg.is_installed)
         .count();
 
-    if let Ok(aur_client) = AurClient::new() {
+    if let Some(aur_client) = shared_aur_client() {
         if !aur_query_names.is_empty() {
             let refs: Vec<&str> = aur_query_names.iter().map(String::as_str).collect();
             match aur_client
@@ -781,7 +788,8 @@ pub async fn search_all_sources(query: &str) -> AppResult<(Vec<PackageItem>, Vec
 
     let pacman_fut = pacman::search_packages(&trimmed, &updates_simple);
     let aur_fut = async {
-        let client = AurClient::new()?;
+        let client = shared_aur_client()
+            .ok_or_else(|| AppError::AurHelperError(String::from("Client AUR partagé non initialisé")))?;
         client.search(&trimmed, &foreign_installed_versions).await
     };
     let flatpak_fut = async {
@@ -936,7 +944,7 @@ pub async fn resolve_optional_dependencies(
         }
     }
 
-    let aur_client = AurClient::new().ok();
+    let aur_client = shared_aur_client();
 
     if !aur_targets.is_empty() {
         if let Some(ref client) = aur_client {
@@ -1142,7 +1150,7 @@ pub async fn install_batch_with_progress(
         let installed_versions = pacman::list_all_installed_versions()
             .await
             .unwrap_or_default();
-        if let Ok(client) = AurClient::new() {
+        if let Some(client) = shared_aur_client() {
             if let Ok(mut aur_deps) = client
                 .resolve_aur_dependencies(&aur_targets, &installed_versions)
                 .await
@@ -1420,7 +1428,7 @@ pub fn sync_self_installed_binaries() {
 
 /// Charge une vague supplémentaire de paquets AUR pour prolonger l'exploration paginée sans limite.
 pub async fn load_more_aur_discovery_wave(wave_index: usize) -> Vec<PackageItem> {
-    let Ok(aur_client) = AurClient::new() else {
+    let Some(aur_client) = shared_aur_client() else {
         return Vec::new();
     };
     let all_installed_versions = pacman::list_all_installed_versions()

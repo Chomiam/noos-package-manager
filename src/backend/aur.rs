@@ -3,6 +3,7 @@ use std::env;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use reqwest::Client;
@@ -341,6 +342,27 @@ pub fn detect_aur_helper() -> Option<AurHelper> {
     }
 
     detect_aur_helper_in_dirs(&search_dirs)
+}
+
+/// Client HTTP AUR partagé par l'ensemble de l'application.
+///
+/// Initialisé une seule fois au démarrage via [`init_shared_aur_client`] et réutilisé
+/// par tous les appels à l'API AUR RPC v5 afin d'éviter de recréer un `reqwest::Client`
+/// (et son pool de connexions TCP/TLS) à chaque requête.
+static SHARED_AUR_CLIENT: OnceLock<AurClient> = OnceLock::new();
+
+/// Retourne une référence au client AUR partagé s'il a été initialisé.
+pub fn shared_aur_client() -> Option<&'static AurClient> {
+    SHARED_AUR_CLIENT.get()
+}
+
+/// Initialise le client AUR partagé. Doit être appelé une fois au démarrage de l'application
+/// (par exemple depuis [`crate::backend::load_system_catalog_with_options`]).
+///
+/// Retourne une référence statique valide pour toute la durée du processus.
+pub fn init_shared_aur_client() -> AppResult<&'static AurClient> {
+    let client = AurClient::new()?;
+    Ok(SHARED_AUR_CLIENT.get_or_init(|| client))
 }
 
 #[derive(Debug, Clone)]

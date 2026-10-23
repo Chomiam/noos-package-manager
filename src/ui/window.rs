@@ -49,6 +49,11 @@ struct AppUiState {
     lock_dialog_open: bool,
     lock_dismissed_while_present: bool,
     sidebar_collapsed: bool,
+    /// Historique des notifications utilisateur (erreurs, fin de mises à jour, alertes).
+    /// Affiché via la cloche dans la barre supérieure.
+    notifications: Vec<String>,
+    /// Nombre de notifications non lues (affiché sur la cloche).
+    notification_unread: usize,
 }
 
 struct SidebarRowWidgets {
@@ -213,6 +218,21 @@ pub fn build_main_window(app: &adw::Application) -> adw::ApplicationWindow {
         .tooltip_text("Opération en cours…")
         .build();
     content_header.pack_start(&spinner);
+
+    // Cloche de notifications (erreurs, fin de mises à jour, alertes système)
+    let notification_btn = gtk4::Button::builder()
+        .icon_name("notification-symbolic")
+        .tooltip_text("Notifications (erreurs, fin de mises à jour, alertes)")
+        .css_classes(["flat"])
+        .build();
+    let notification_badge = gtk4::Label::builder()
+        .label("0")
+        .visible(false)
+        .valign(gtk4::Align::Center)
+        .css_classes(["update-badge"])
+        .build();
+    content_header.pack_start(&notification_btn);
+    content_header.pack_start(&notification_badge);
 
     // Bouton d'ouverture du Gestionnaire d'installation
     let install_mgr_btn = gtk4::Button::builder()
@@ -707,6 +727,70 @@ pub fn build_main_window(app: &adw::Application) -> adw::ApplicationWindow {
         });
     }
 
+    let notification_badge_clone = notification_badge.clone();
+
+    // --- Connexion de la cloche de notifications ---
+    {
+        let state_notif = Rc::clone(&state);
+        let win_notif = window.clone();
+        notification_btn.connect_clicked(move |_| {
+            let (notifs, _unread) = {
+                let st = state_notif.borrow();
+                (st.notifications.clone(), st.notification_unread)
+            };
+            if notifs.is_empty() {
+                let dialog = adw::MessageDialog::builder()
+                    .transient_for(&win_notif)
+                    .modal(true)
+                    .heading("Aucune notification")
+                    .body("Aucune notification pour le moment.")
+                    .build();
+                dialog.add_response("ok", "OK");
+                dialog.set_default_response(Some("ok"));
+                dialog.set_close_response("ok");
+                dialog.present();
+                return;
+            }
+
+            let body = notifs
+                .iter()
+                .enumerate()
+                .map(|(i, n)| format!("{}. {}", i + 1, n))
+                .collect::<Vec<_>>()
+                .join("\n");
+
+            let dialog = adw::MessageDialog::builder()
+                .transient_for(&win_notif)
+                .modal(true)
+                .heading(format!("Notifications ({})", notifs.len()))
+                .body(&body)
+                .build();
+            dialog.add_response("ok", "OK");
+            dialog.add_response("clear", "Tout effacer");
+            dialog.set_default_response(Some("ok"));
+            dialog.set_close_response("ok");
+            dialog.set_response_appearance("clear", adw::ResponseAppearance::Destructive);
+
+            let state_clr = Rc::clone(&state_notif);
+            dialog.connect_response(None, move |dlg, response| {
+                dlg.close();
+                if response == "clear" {
+                    let mut st = state_clr.borrow_mut();
+                    st.notifications.clear();
+                    st.notification_unread = 0;
+                }
+            });
+            dialog.present();
+
+            // Marque les notifications comme lues à l'ouverture.
+            let mut st = state_notif.borrow_mut();
+            st.notification_unread = 0;
+            update_notification_badge(&notification_badge_clone, 0);
+        });
+    }
+
+    let notification_badge_loop = notification_badge.clone();
+
     // --- Boucle de réception asynchrone GLib (UI Thread) ---
     {
         let state_ui = Rc::clone(&state);
@@ -972,6 +1056,20 @@ pub fn build_main_window(app: &adw::Application) -> adw::ApplicationWindow {
                         install_mgr_ui.on_install_finished(success, &message);
 
                         if success {
+                            add_notification(
+                                &state_ui,
+                                &notification_badge_loop,
+                                format!("Installation terminée : {message}"),
+                            );
+                        } else {
+                            add_notification(
+                                &state_ui,
+                                &notification_badge_loop,
+                                format!("Échec d'installation : {message}"),
+                            );
+                        }
+
+                        if success {
                             {
                                 let mut st = state_ui.borrow_mut();
                                 for id in &installed_ids {
@@ -1113,6 +1211,12 @@ pub fn build_main_window(app: &adw::Application) -> adw::ApplicationWindow {
                         actions_ui.refresh_btn.set_sensitive(true);
                         actions_ui.update_all_btn.set_sensitive(true);
 
+                        add_notification(
+                            &state_ui,
+                            &notification_badge_loop,
+                            format!("Succès : {message}"),
+                        );
+
                         let toast = adw::Toast::builder()
                             .title(&message)
                             .timeout(4)
@@ -1129,6 +1233,12 @@ pub fn build_main_window(app: &adw::Application) -> adw::ApplicationWindow {
                         actions_ui.refresh_btn.set_sensitive(true);
                         actions_ui.update_all_btn.set_sensitive(true);
                         update_selection_buttons(&state_ui, &actions_ui);
+
+                        add_notification(
+                            &state_ui,
+                            &notification_badge_loop,
+                            format!("Erreur : {title} — {detail}"),
+                        );
 
                         let toast = adw::Toast::builder()
                             .title(&title)
@@ -1373,6 +1483,34 @@ fn widen_preferences_page_clamp(widget: &gtk4::Widget) {
     while let Some(child) = child_opt {
         widen_preferences_page_clamp(&child);
         child_opt = child.next_sibling();
+    }
+}
+
+/// Met à jour le badge compteur de la cloche de notifications.
+fn update_notification_badge(badge: &gtk4::Label, unread: usize) {
+    if unread > 0 {
+        badge.set_label(&unread.to_string());
+        badge.set_visible(true);
+    } else {
+        badge.set_visible(false);
+    }
+}
+
+/// Ajoute une notification utilisateur à l'état et met à jour le badge de la cloche.
+fn add_notification(state_rc: &Rc<RefCell<AppUiState>>, badge: &gtk4::Label, message: impl Into<String>) {
+    let msg = message.into();
+    {
+        let mut st = state_rc.borrow_mut();
+        st.notifications.push(msg.clone());
+        // Garde les 100 notifications les plus récentes.
+        let len = st.notifications.len();
+        if len > 100 {
+            st.notifications.drain(..len - 100);
+        }
+        st.notification_unread += 1;
+        let unread = st.notification_unread;
+        drop(st);
+        update_notification_badge(badge, unread);
     }
 }
 
