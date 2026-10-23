@@ -53,6 +53,9 @@ pub enum BackendCommand {
     UpdateAllSystem {
         items: Vec<PackageItem>,
     },
+    LoadMoreAurPackages {
+        wave_index: usize,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -61,6 +64,10 @@ pub enum UiEvent {
         message: String,
     },
     CatalogLoaded(CatalogSnapshot),
+    AurMorePackagesLoaded {
+        wave_index: usize,
+        items: Vec<PackageItem>,
+    },
     UpdatesChecked {
         snapshot: CatalogSnapshot,
         summary_toast: String,

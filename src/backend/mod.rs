@@ -183,9 +183,23 @@ pub async fn load_system_catalog_with_options(force_sync: bool) -> AppResult<Cat
                     }
 
                     // Ajout des paquets AUR populaires non encore installés (ni via Pacman ni via AUR) pour le catalogue AUR
+                    let mut seen_aur_names = already_in_catalog.clone();
                     for (_, extra_aur_pkg) in enriched_map {
-                        if !already_in_catalog.contains(&extra_aur_pkg.name) {
+                        if seen_aur_names.insert(extra_aur_pkg.name.clone()) {
                             installed_packages.push(extra_aur_pkg);
+                        }
+                    }
+
+                    let discovery_pool = aur_client
+                        .fetch_initial_discovery_pool(&foreign_installed_versions)
+                        .await;
+                    for mut disc_pkg in discovery_pool {
+                        if !all_installed_versions.contains_key(&disc_pkg.name)
+                            && seen_aur_names.insert(disc_pkg.name.clone())
+                        {
+                            disc_pkg.is_installed = false;
+                            disc_pkg.update_available = None;
+                            installed_packages.push(disc_pkg);
                         }
                     }
                 }
@@ -567,8 +581,14 @@ pub async fn refresh_catalog_updates(
         .collect();
 
     let mut enriched_aur_map: HashMap<String, PackageItem> = HashMap::new();
-    if !aur_query_names.is_empty() {
-        if let Ok(aur_client) = AurClient::new() {
+    let non_installed_aur_count = snapshot
+        .packages
+        .iter()
+        .filter(|pkg| matches!(pkg.source, PackageSource::Aur) && !pkg.is_installed)
+        .count();
+
+    if let Ok(aur_client) = AurClient::new() {
+        if !aur_query_names.is_empty() {
             let refs: Vec<&str> = aur_query_names.iter().map(String::as_str).collect();
             match aur_client
                 .fetch_enriched_aur_items(&refs, &foreign_installed_versions)
@@ -580,6 +600,23 @@ pub async fn refresh_catalog_updates(
                     }
                 }
                 Err(e) => warnings.push(format!("Vérification AUR RPC v5 : {e}")),
+            }
+        }
+
+        if non_installed_aur_count < 250 {
+            let mut known_names: HashSet<String> =
+                snapshot.packages.iter().map(|p| p.name.clone()).collect();
+            let discovery_pool = aur_client
+                .fetch_initial_discovery_pool(&foreign_installed_versions)
+                .await;
+            for mut disc_pkg in discovery_pool {
+                if !all_installed_versions.contains_key(&disc_pkg.name)
+                    && known_names.insert(disc_pkg.name.clone())
+                {
+                    disc_pkg.is_installed = false;
+                    disc_pkg.update_available = None;
+                    snapshot.packages.push(disc_pkg);
+                }
             }
         }
     }
@@ -1379,6 +1416,30 @@ pub fn sync_self_installed_binaries() {
             .join("\n");
         let _ = std::fs::write(&desktop_path, format!("{updated}\n"));
     }
+}
+
+/// Charge une vague supplémentaire de paquets AUR pour prolonger l'exploration paginée sans limite.
+pub async fn load_more_aur_discovery_wave(wave_index: usize) -> Vec<PackageItem> {
+    let Ok(aur_client) = AurClient::new() else {
+        return Vec::new();
+    };
+    let all_installed_versions = pacman::list_all_installed_versions()
+        .await
+        .unwrap_or_default();
+    let raw_wave = aur_client
+        .fetch_discovery_wave(wave_index, &HashMap::new())
+        .await;
+    raw_wave
+        .into_iter()
+        .filter(|pkg| {
+            !all_installed_versions.contains_key(&pkg.name) && pkg.name != SELF_PACKAGE_NAME
+        })
+        .map(|mut pkg| {
+            pkg.is_installed = false;
+            pkg.update_available = None;
+            pkg
+        })
+        .collect()
 }
 
 /// Exécute la mise à jour globale de tous les paquets système (Pacman via `pkexec pacman -Syu`),

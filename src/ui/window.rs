@@ -39,6 +39,9 @@ struct AppUiState {
     selected_category: SidebarCategory,
     aur_sort_mode: AurSortMode,
     aur_current_page: usize,
+    aur_next_wave_index: usize,
+    aur_loading_more: bool,
+    aur_advance_page_on_load: bool,
     updates_count: usize,
     aur_helper: Option<AurHelper>,
     active_groups: Vec<adw::PreferencesGroup>,
@@ -86,7 +89,10 @@ pub fn build_main_window(app: &adw::Application) -> adw::ApplicationWindow {
 
     spawn_backend_worker(cmd_rx, ui_tx, Arc::clone(&cancel_handle));
 
-    let state = Rc::new(RefCell::new(AppUiState::default()));
+    let state = Rc::new(RefCell::new(AppUiState {
+        aur_next_wave_index: backend::aur::INITIAL_AUR_DISCOVERY_WAVES_COUNT,
+        ..AppUiState::default()
+    }));
 
     let toast_overlay = adw::ToastOverlay::new();
 
@@ -745,11 +751,13 @@ pub fn build_main_window(app: &adw::Application) -> adw::ApplicationWindow {
 
                         let data_changed = {
                             let mut st = state_ui.borrow_mut();
-                            let changed = st.catalog_packages != snapshot.packages
+                            let mut merged_packages = snapshot.packages;
+                            merge_preserved_aur_catalog(&mut merged_packages, &st.catalog_packages);
+                            let changed = st.catalog_packages != merged_packages
                                 || st.recommendations != snapshot.recommendations
                                 || st.flatpak_recommendations != snapshot.flatpak_recommendations
                                 || st.aur_helper != snapshot.aur_helper;
-                            st.catalog_packages = snapshot.packages;
+                            st.catalog_packages = merged_packages;
                             st.recommendations = snapshot.recommendations;
                             st.flatpak_recommendations = snapshot.flatpak_recommendations;
                             st.updates_count = snapshot.updates_count;
@@ -802,7 +810,9 @@ pub fn build_main_window(app: &adw::Application) -> adw::ApplicationWindow {
 
                         {
                             let mut st = state_ui.borrow_mut();
-                            st.catalog_packages = snapshot.packages;
+                            let mut merged_packages = snapshot.packages;
+                            merge_preserved_aur_catalog(&mut merged_packages, &st.catalog_packages);
+                            st.catalog_packages = merged_packages;
                             st.recommendations = snapshot.recommendations;
                             st.flatpak_recommendations = snapshot.flatpak_recommendations;
                             st.updates_count = snapshot.updates_count;
@@ -850,6 +860,58 @@ pub fn build_main_window(app: &adw::Application) -> adw::ApplicationWindow {
                                 st.search_results = Some(results);
                             }
 
+                            rebuild_package_list_ui(
+                                &state_ui,
+                                &prefs_page,
+                                &stack,
+                                &empty_page,
+                                &badges_ui,
+                                &actions_ui,
+                                &tx_ui,
+                            );
+                        }
+                    }
+                    UiEvent::AurMorePackagesLoaded { wave_index, items } => {
+                        spinner_ui.set_spinning(false);
+                        spinner_ui.set_visible(false);
+
+                        let mut retry_next_wave: Option<usize> = None;
+                        {
+                            let mut st = state_ui.borrow_mut();
+                            let existing_names: std::collections::HashSet<String> = st
+                                .catalog_packages
+                                .iter()
+                                .filter(|p| p.source == PackageSource::Aur)
+                                .map(|p| p.name.clone())
+                                .collect();
+                            let mut added_count = 0usize;
+                            for pkg in items {
+                                if !existing_names.contains(&pkg.name) {
+                                    st.catalog_packages.push(pkg);
+                                    added_count += 1;
+                                }
+                            }
+                            let next_idx = wave_index + 1;
+                            st.aur_next_wave_index = st.aur_next_wave_index.max(next_idx);
+                            if added_count == 0
+                                && st.aur_next_wave_index < backend::aur::AUR_DISCOVERY_WAVES.len()
+                            {
+                                retry_next_wave = Some(st.aur_next_wave_index);
+                                st.aur_loading_more = true;
+                            } else {
+                                st.aur_loading_more = false;
+                                if st.aur_advance_page_on_load && added_count > 0 {
+                                    st.aur_current_page += 1;
+                                }
+                                st.aur_advance_page_on_load = false;
+                            }
+                        }
+
+                        if let Some(next_wave) = retry_next_wave {
+                            let _ = tx_ui.send(BackendCommand::LoadMoreAurPackages {
+                                wave_index: next_wave,
+                            });
+                        } else {
                             rebuild_package_list_ui(
                                 &state_ui,
                                 &prefs_page,
@@ -2049,13 +2111,26 @@ fn rebuild_package_list_ui(
     // Dans l'onglet AUR : pagination par pages de AUR_PAGE_SIZE paquets, sans bannière générale d'obsolescence
     if matches!(category, SidebarCategory::Aur) {
         let total_pages = total_found.div_ceil(AUR_PAGE_SIZE).max(1);
-        let current_page = {
+        let (current_page, can_load_more, prefetch_wave) = {
             let mut st = state_rc.borrow_mut();
             if st.aur_current_page >= total_pages {
                 st.aur_current_page = total_pages - 1;
             }
-            st.aur_current_page
+            let current = st.aur_current_page;
+            let has_more_waves = st.active_query.is_empty()
+                && st.aur_next_wave_index < backend::aur::AUR_DISCOVERY_WAVES.len();
+            let prefetch = if has_more_waves && !st.aur_loading_more && current + 3 >= total_pages {
+                st.aur_loading_more = true;
+                Some(st.aur_next_wave_index)
+            } else {
+                None
+            };
+            (current, has_more_waves, prefetch)
         };
+
+        if let Some(wave_index) = prefetch_wave {
+            let _ = cmd_tx.send(BackendCommand::LoadMoreAurPackages { wave_index });
+        }
 
         let start_idx = current_page * AUR_PAGE_SIZE;
         let end_idx = (start_idx + AUR_PAGE_SIZE).min(total_found);
@@ -2066,14 +2141,13 @@ fn rebuild_package_list_ui(
             None => String::from(" · Aucun assistant AUR détecté (yay)"),
         };
 
+        let plus_suffix = if can_load_more { "+" } else { "" };
         let group_desc = format!(
-            "{} — Page {} sur {} (paquets {} à {} sur {}){helper_note}",
+            "{} — Page {} sur {total_pages}{plus_suffix} (paquets {} à {} sur {total_found}{plus_suffix}){helper_note}",
             category.subtitle(),
             current_page + 1,
-            total_pages,
             start_idx + 1,
             end_idx,
-            total_found
         );
 
         let escaped_group_title = glib::markup_escape_text(category.title());
@@ -2083,10 +2157,11 @@ fn rebuild_package_list_ui(
             .description(escaped_group_desc.as_str())
             .build();
 
-        if total_pages > 1 {
+        if total_pages > 1 || can_load_more {
             let top_nav = build_aur_header_pagination_box(
                 current_page,
                 total_pages,
+                can_load_more,
                 state_rc,
                 prefs_page,
                 stack,
@@ -2106,10 +2181,11 @@ fn rebuild_package_list_ui(
             group.add(&row);
         }
 
-        if total_pages > 1 {
+        if total_pages > 1 || can_load_more {
             let pagination_row = build_aur_pagination_row(
                 current_page,
                 total_pages,
+                can_load_more,
                 total_found,
                 start_idx,
                 end_idx,
@@ -2164,6 +2240,7 @@ fn rebuild_package_list_ui(
 fn build_aur_header_pagination_box(
     current_page: usize,
     total_pages: usize,
+    can_load_more: bool,
     state_rc: &Rc<RefCell<AppUiState>>,
     prefs_page: &adw::PreferencesPage,
     stack: &gtk4::Stack,
@@ -2209,8 +2286,12 @@ fn build_aur_header_pagination_box(
     }
     nav_box.append(&prev_btn);
 
+    let plus_suffix = if can_load_more { "+" } else { "" };
     let page_lbl = gtk4::Label::builder()
-        .label(format!("Page {} / {}", current_page + 1, total_pages))
+        .label(format!(
+            "Page {} / {total_pages}{plus_suffix}",
+            current_page + 1
+        ))
         .margin_start(4)
         .margin_end(4)
         .css_classes(["dim-label"])
@@ -2219,7 +2300,7 @@ fn build_aur_header_pagination_box(
 
     let next_btn = gtk4::Button::builder()
         .icon_name("go-next-symbolic")
-        .sensitive(current_page + 1 < total_pages)
+        .sensitive(current_page + 1 < total_pages || can_load_more)
         .tooltip_text("Page suivante")
         .build();
     {
@@ -2231,21 +2312,35 @@ fn build_aur_header_pagination_box(
         let actions_clone = actions.clone();
         let tx_clone = cmd_tx.clone();
         next_btn.connect_clicked(move |_| {
+            let mut load_wave: Option<usize> = None;
+            let mut should_rebuild = false;
             {
                 let mut st = st_clone.borrow_mut();
                 if st.aur_current_page + 1 < total_pages {
                     st.aur_current_page += 1;
+                    should_rebuild = true;
+                } else if st.aur_next_wave_index < backend::aur::AUR_DISCOVERY_WAVES.len() {
+                    st.aur_advance_page_on_load = true;
+                    if !st.aur_loading_more {
+                        st.aur_loading_more = true;
+                        load_wave = Some(st.aur_next_wave_index);
+                    }
                 }
             }
-            rebuild_package_list_ui(
-                &st_clone,
-                &page_clone,
-                &stack_clone,
-                &empty_clone,
-                &badges_clone,
-                &actions_clone,
-                &tx_clone,
-            );
+            if let Some(wave_index) = load_wave {
+                let _ = tx_clone.send(BackendCommand::LoadMoreAurPackages { wave_index });
+            }
+            if should_rebuild {
+                rebuild_package_list_ui(
+                    &st_clone,
+                    &page_clone,
+                    &stack_clone,
+                    &empty_clone,
+                    &badges_clone,
+                    &actions_clone,
+                    &tx_clone,
+                );
+            }
         });
     }
     nav_box.append(&next_btn);
@@ -2257,6 +2352,7 @@ fn build_aur_header_pagination_box(
 fn build_aur_pagination_row(
     current_page: usize,
     total_pages: usize,
+    can_load_more: bool,
     total_found: usize,
     start_idx: usize,
     end_idx: usize,
@@ -2278,14 +2374,13 @@ fn build_aur_pagination_row(
         .valign(gtk4::Align::Center)
         .build();
 
+    let plus_suffix = if can_load_more { "+" } else { "" };
     let info_lbl = gtk4::Label::builder()
         .label(format!(
-            "Paquets {}–{} sur {} (Page {} / {})",
+            "Paquets {}–{} sur {total_found}{plus_suffix} (Page {} / {total_pages}{plus_suffix})",
             start_idx + 1,
             end_idx,
-            total_found,
             current_page + 1,
-            total_pages
         ))
         .xalign(0.0)
         .hexpand(true)
@@ -2380,7 +2475,7 @@ fn build_aur_pagination_row(
 
     let next_btn = gtk4::Button::builder()
         .label("Suivant →")
-        .sensitive(current_page + 1 < total_pages)
+        .sensitive(current_page + 1 < total_pages || can_load_more)
         .tooltip_text("Aller à la page suivante de paquets AUR")
         .build();
     {
@@ -2392,21 +2487,35 @@ fn build_aur_pagination_row(
         let actions_clone = actions.clone();
         let tx_clone = cmd_tx.clone();
         next_btn.connect_clicked(move |_| {
+            let mut load_wave: Option<usize> = None;
+            let mut should_rebuild = false;
             {
                 let mut st = st_clone.borrow_mut();
                 if st.aur_current_page + 1 < total_pages {
                     st.aur_current_page += 1;
+                    should_rebuild = true;
+                } else if st.aur_next_wave_index < backend::aur::AUR_DISCOVERY_WAVES.len() {
+                    st.aur_advance_page_on_load = true;
+                    if !st.aur_loading_more {
+                        st.aur_loading_more = true;
+                        load_wave = Some(st.aur_next_wave_index);
+                    }
                 }
             }
-            rebuild_package_list_ui(
-                &st_clone,
-                &page_clone,
-                &stack_clone,
-                &empty_clone,
-                &badges_clone,
-                &actions_clone,
-                &tx_clone,
-            );
+            if let Some(wave_index) = load_wave {
+                let _ = tx_clone.send(BackendCommand::LoadMoreAurPackages { wave_index });
+            }
+            if should_rebuild {
+                rebuild_package_list_ui(
+                    &st_clone,
+                    &page_clone,
+                    &stack_clone,
+                    &empty_clone,
+                    &badges_clone,
+                    &actions_clone,
+                    &tx_clone,
+                );
+            }
         });
     }
     nav_box.append(&next_btn);
@@ -3106,6 +3215,30 @@ async fn handle_backend_command(
                         .await;
                 }
             }
+        }
+        BackendCommand::LoadMoreAurPackages { wave_index } => {
+            let _ = ui_tx
+                .send(UiEvent::LoadingStarted {
+                    message: String::from("Chargement de paquets AUR supplémentaires…"),
+                })
+                .await;
+            let items = backend::load_more_aur_discovery_wave(wave_index).await;
+            let _ = ui_tx
+                .send(UiEvent::AurMorePackagesLoaded { wave_index, items })
+                .await;
+        }
+    }
+}
+
+fn merge_preserved_aur_catalog(new_packages: &mut Vec<PackageItem>, old_packages: &[PackageItem]) {
+    let existing_names: std::collections::HashSet<String> =
+        new_packages.iter().map(|p| p.name.clone()).collect();
+    for pkg in old_packages {
+        if pkg.source == PackageSource::Aur
+            && !pkg.is_installed
+            && !existing_names.contains(&pkg.name)
+        {
+            new_packages.push(pkg.clone());
         }
     }
 }

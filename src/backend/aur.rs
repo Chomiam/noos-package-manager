@@ -102,6 +102,43 @@ pub const POPULAR_AUR_SHOWCASE: &[&str] = &[
     "drawio-desktop-bin",
 ];
 
+pub const INITIAL_AUR_DISCOVERY_WAVES_COUNT: usize = 4;
+
+pub const AUR_DISCOVERY_WAVES: &[&str] = &[
+    "wayland",
+    "hyprland",
+    "browser",
+    "vulkan",
+    "nvidia",
+    "docker",
+    "discord",
+    "proton",
+    "spotify",
+    "gaming",
+    "terminal",
+    "neovim",
+    "bluetooth",
+    "pipewire",
+    "flatpak",
+    "appimage",
+    "systemd",
+    "wireguard",
+    "nextcloud",
+    "obs",
+    "blender",
+    "krita",
+    "libreoffice",
+    "thunderbird",
+    "telegram",
+    "bitwarden",
+    "keepass",
+    "firmware",
+    "amdgpu",
+    "intel",
+    "audio",
+    "video",
+];
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct AurRpcResponse {
     pub version: u32,
@@ -400,6 +437,47 @@ impl AurClient {
             }
         }
         Ok(items)
+    }
+
+    /// Charge un lot initial étendu de paquets AUR populaires afin que l'exploration par pages
+    /// ne soit pas limitée aux 80 paquets de base.
+    pub async fn fetch_initial_discovery_pool(
+        &self,
+        installed_versions: &HashMap<String, String>,
+    ) -> Vec<PackageItem> {
+        let (r0, r1, r2, r3) = tokio::join!(
+            self.search(AUR_DISCOVERY_WAVES[0], installed_versions),
+            self.search(AUR_DISCOVERY_WAVES[1], installed_versions),
+            self.search(AUR_DISCOVERY_WAVES[2], installed_versions),
+            self.search(AUR_DISCOVERY_WAVES[3], installed_versions),
+        );
+
+        let mut seen = HashSet::new();
+        let mut pool = Vec::new();
+        for list in [r0, r1, r2, r3].into_iter().flatten() {
+            for item in list.into_iter().take(160) {
+                if seen.insert(item.name.clone()) {
+                    pool.push(item);
+                }
+            }
+        }
+        pool.sort_by(|a, b| AurSortMode::Popularity.compare_items(a, b));
+        pool
+    }
+
+    /// Charge une vague supplémentaire de paquets AUR à la demande lors de la navigation dans les pages.
+    pub async fn fetch_discovery_wave(
+        &self,
+        wave_index: usize,
+        installed_versions: &HashMap<String, String>,
+    ) -> Vec<PackageItem> {
+        let Some(&term) = AUR_DISCOVERY_WAVES.get(wave_index) else {
+            return Vec::new();
+        };
+        let mut items = self.search(term, installed_versions).await.unwrap_or_default();
+        items.sort_by(|a, b| AurSortMode::Popularity.compare_items(a, b));
+        items.truncate(240);
+        items
     }
 
     /// Vérifie les mises à jour disponibles sur AUR pour les paquets étrangers installés.

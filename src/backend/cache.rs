@@ -234,6 +234,19 @@ pub fn compute_pacman_aur_diff(
         }
     }
 
+    // Conserver également tous les paquets AUR supplémentaires découverts et mis en cache
+    for (_, mut extra_pkg) in cached_by_name {
+        if matches!(extra_pkg.source, PackageSource::Aur)
+            && !all_installed_versions.contains_key(&extra_pkg.name)
+            && extra_pkg.name != SELF_PACKAGE_NAME
+        {
+            extra_pkg.id = format!("aur:{}", extra_pkg.name);
+            extra_pkg.is_installed = false;
+            extra_pkg.update_available = None;
+            retained_showcase.push(extra_pkg);
+        }
+    }
+
     PacmanAurDiffPlan {
         retained_installed,
         added_installed_names,
