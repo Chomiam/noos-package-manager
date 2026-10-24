@@ -177,6 +177,30 @@ pub fn build_main_window(app: &adw::Application) -> adw::ApplicationWindow {
         .build();
     sidebar_toolbar.set_content(Some(&sidebar_scroll));
 
+    // Version de l'application, affichée en bas à gauche de la fenêtre.
+    let version_label = gtk4::Label::builder()
+        .label(format!("v{}", env!("CARGO_PKG_VERSION")))
+        .halign(gtk4::Align::Start)
+        .margin_start(10)
+        .margin_end(8)
+        .margin_top(6)
+        .margin_bottom(6)
+        .ellipsize(gtk4::pango::EllipsizeMode::End)
+        .max_width_chars(12)
+        .css_classes(["dim-label", "caption"])
+        .tooltip_text(format!(
+            "noos-package-manager v{}",
+            env!("CARGO_PKG_VERSION")
+        ))
+        .build();
+
+    let sidebar_footer = gtk4::Box::builder()
+        .orientation(gtk4::Orientation::Horizontal)
+        .halign(gtk4::Align::Start)
+        .build();
+    sidebar_footer.append(&version_label);
+    sidebar_toolbar.add_bottom_bar(&sidebar_footer);
+
     let sidebar_page = adw::NavigationPage::builder()
         .title("Gestionnaire de paquets")
         .tag("sidebar")
@@ -442,6 +466,7 @@ pub fn build_main_window(app: &adw::Application) -> adw::ApplicationWindow {
         let sidebar_hbox_ref = sidebar_header_box.clone();
         let collapsed_wc_ref = collapsed_window_controls;
         let badges_ref = Rc::clone(&badge_widgets);
+        let version_label_ref = version_label.clone();
 
         sidebar_toggle_btn.connect_clicked(move |btn| {
             let (is_collapsed, updates_count) = {
@@ -463,6 +488,7 @@ pub fn build_main_window(app: &adw::Application) -> adw::ApplicationWindow {
                 &collapsed_wc_ref,
                 btn,
                 &badges_ref,
+                &version_label_ref,
                 is_collapsed,
                 updates_count,
             );
@@ -1551,6 +1577,7 @@ fn apply_sidebar_collapsed_state(
     collapsed_window_controls: &gtk4::WindowControls,
     sidebar_toggle_btn: &gtk4::Button,
     badges: &CategoryBadgeWidgets,
+    version_label: &gtk4::Label,
     is_collapsed: bool,
     updates_count: usize,
 ) {
@@ -1578,6 +1605,10 @@ fn apply_sidebar_collapsed_state(
         badges.installed_label.set_visible(false);
         badges.updates_label.set_visible(false);
         badges.appimages_label.set_visible(false);
+
+        version_label.set_halign(gtk4::Align::Center);
+        version_label.set_margin_start(0);
+        version_label.set_margin_end(0);
 
         split_view.set_min_sidebar_width(SIDEBAR_COLLAPSED_WIDTH);
         split_view.set_max_sidebar_width(SIDEBAR_COLLAPSED_WIDTH);
@@ -1611,6 +1642,10 @@ fn apply_sidebar_collapsed_state(
         badges.installed_label.set_visible(true);
         badges.updates_label.set_visible(updates_count > 0);
         badges.appimages_label.set_visible(true);
+
+        version_label.set_halign(gtk4::Align::Start);
+        version_label.set_margin_start(10);
+        version_label.set_margin_end(8);
     }
 }
 
