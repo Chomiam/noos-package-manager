@@ -144,6 +144,26 @@ pub async fn list_mirrors() -> AppResult<Vec<ReflectorMirror>> {
     Ok(parse_reflector_output(&stdout, &stderr))
 }
 
+/// Construit le contenu de `/etc/pacman.d/mirrorlist`.
+///
+/// Les URL sont stockées sans slash final ; il faut donc en ajouter un avant
+/// `$repo/os/$arch`, sinon Pacman construit des URL invalides du type
+/// `https://miroir.orgcore/os/x86_64`.
+pub(crate) fn render_mirrorlist(servers: &[String]) -> String {
+    let mut content = String::from(
+        "# /etc/pacman.d/mirrorlist\n\
+         # Généré par noos-package-manager via Reflector\n\n",
+    );
+    for server in servers {
+        let base = server.trim().trim_end_matches('/');
+        if base.is_empty() {
+            continue;
+        }
+        content.push_str(&format!("Server = {base}/$repo/os/$arch\n"));
+    }
+    content
+}
+
 /// Écrit `/etc/pacman.d/mirrorlist` avec les miroirs fournis.
 pub async fn apply_mirrorlist(elevation: &Elevation, servers: &[String]) -> AppResult<String> {
     let mut unique = Vec::new();
@@ -173,13 +193,7 @@ pub async fn apply_mirrorlist(elevation: &Elevation, servers: &[String]) -> AppR
         )));
     }
 
-    let mut content = String::from(
-        "# /etc/pacman.d/mirrorlist\n\
-         # Généré par noos-package-manager via Reflector\n\n",
-    );
-    for server in &unique {
-        content.push_str(&format!("Server = {server}$repo/os/$arch\n"));
-    }
+    let content = render_mirrorlist(&unique);
 
     let temp_dir = tempfile::tempdir()?;
     let temp_path = temp_dir.path().join("mirrorlist");

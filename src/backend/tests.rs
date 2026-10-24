@@ -14,7 +14,7 @@ use crate::backend::aur::{
 };
 use crate::backend::aur_versions::parse_pkgbuild_version;
 use crate::backend::needrestart::{parse_batch_output as parse_needrestart_batch, reboot_recommended};
-use crate::backend::reflector::parse_reflector_output;
+use crate::backend::reflector::{parse_reflector_output, render_mirrorlist};
 use crate::backend::details::{
     extract_github_from_url, markdown_to_pango_markup, parse_pacman_detail_fields,
     resolve_github_owner_repo,
@@ -863,6 +863,17 @@ delay           : 68
     assert_eq!(mirrors[0].rate_kib_s, 30300.32);
     assert_eq!(mirrors[1].url, "https://berlin.mirror.pkgbuild.com");
     assert_eq!(mirrors[1].protocol, "https");
+}
+
+#[test]
+fn test_render_mirrorlist_adds_missing_slash() {
+    let content = render_mirrorlist(&[
+        String::from("https://fastly.mirror.pkgbuild.com"),
+        String::from("http://ftp.halifax.rwth-aachen.de/archlinux/"),
+    ]);
+    assert!(content.contains("Server = https://fastly.mirror.pkgbuild.com/$repo/os/$arch"));
+    assert!(content.contains("Server = http://ftp.halifax.rwth-aachen.de/archlinux/$repo/os/$arch"));
+    assert!(!content.contains(".com$repo"));
 }
 
 #[test]
