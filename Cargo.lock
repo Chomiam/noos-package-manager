@@ -1453,7 +1453,7 @@ dependencies = [
 
 [[package]]
 name = "noos-package-manager"
-version = "0.1.13"
+version = "0.1.14"
 dependencies = [
  "async-channel",
  "crossterm 0.28.1",
