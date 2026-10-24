@@ -57,9 +57,12 @@ jobs:
         run: |
           set -euo pipefail
           VERSION="$(grep -m1 '^pkgver=' PKGBUILD | cut -d= -f2)"
-          git archive --format=tar.gz \
-            --prefix="noos-package-manager-${VERSION}/" \
-            HEAD -o "noos-package-manager-${VERSION}.tar.gz"
+          rm -rf /tmp/srcbuild
+          mkdir -p "/tmp/srcbuild/noos-package-manager-${VERSION}"
+          tar -C "$GITHUB_WORKSPACE" --exclude=.git --exclude=target -cf - . \
+            | tar -C "/tmp/srcbuild/noos-package-manager-${VERSION}" -xf -
+          tar -C /tmp/srcbuild -czf "$GITHUB_WORKSPACE/noos-package-manager-${VERSION}.tar.gz" \
+            "noos-package-manager-${VERSION}"
           id builder >/dev/null 2>&1 || useradd -m builder
           chown -R builder:builder "$GITHUB_WORKSPACE"
           su - builder -c "cd '$GITHUB_WORKSPACE' && makepkg --nodeps --nocheck --skipchecksums --noconfirm"

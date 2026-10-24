@@ -48,8 +48,8 @@ go install github.com/slsa-framework/slsa-verifier/v2/cli/slsa-verifier@latest
 Puis, dans le dossier contenant les fichiers téléchargés :
 
 ```bash
-TAG=v0.1.13
-VERSION=0.1.13
+TAG=v0.1.14
+VERSION=0.1.14
 
 slsa-verifier verify-artifact \
   "noos-package-manager-${VERSION}-1-x86_64.pkg.tar.zst" \
