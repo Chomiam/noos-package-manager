@@ -2,7 +2,7 @@ use std::cell::RefCell;
 use std::collections::HashSet;
 use std::rc::Rc;
 use std::sync::mpsc::Sender;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use gtk4::glib;
 use gtk4::prelude::*;
@@ -22,6 +22,7 @@ pub struct SettingsView {
     mirror_spinner: gtk4::Spinner,
     mirror_loading: Rc<std::cell::Cell<bool>>,
     refresh_source: Rc<RefCell<Option<gtk4::glib::SourceId>>>,
+    refresh_deadline: Rc<std::cell::Cell<Instant>>,
     apply_best_button: gtk4::Button,
     apply_selection_button: gtk4::Button,
     mirrors: Rc<RefCell<Vec<ReflectorMirror>>>,
@@ -41,8 +42,8 @@ impl SettingsView {
         let mirror_group = adw::PreferencesGroup::builder()
             .title("Miroirs Pacman (Reflector)")
             .description(
-                "Analyse les miroirs Arch et actualise leur débit automatiquement \
-                 toutes les 4 secondes tant que cette page est ouverte.",
+                "Analyse les miroirs Arch et actualise leur débit toutes les 4 secondes \
+                 pendant 1 minute à l'ouverture de cette page.",
             )
             .build();
 
@@ -176,6 +177,7 @@ impl SettingsView {
             mirror_spinner,
             mirror_loading: Rc::new(std::cell::Cell::new(false)),
             refresh_source: Rc::new(RefCell::new(None)),
+            refresh_deadline: Rc::new(std::cell::Cell::new(Instant::now())),
             apply_best_button,
             apply_selection_button,
             mirrors: Rc::new(RefCell::new(Vec::new())),
@@ -252,18 +254,30 @@ impl SettingsView {
         self.set_mirror_status("Actualisation des miroirs et mesure des débits en cours…");
     }
 
-    /// Démarre l'actualisation automatique (toutes les 4 s) tant que la page est visible.
+    /// Démarre l'actualisation automatique (toutes les 4 s) pendant au plus 1 minute,
+    /// et uniquement tant que la page Paramètres est visible.
     pub fn start_auto_refresh(&self) {
+        self.refresh_deadline
+            .set(Instant::now() + Duration::from_secs(60));
         self.refresh_mirrors_if_idle();
         if self.refresh_source.borrow().is_some() {
             return;
         }
 
         let view = self.clone();
+        let source_holder = Rc::clone(&self.refresh_source);
         let source = glib::timeout_add_local(Duration::from_secs(4), move || {
-            if view.root.is_mapped() {
-                view.refresh_mirrors_if_idle();
+            if !view.root.is_mapped() || Instant::now() >= view.refresh_deadline.get() {
+                *source_holder.borrow_mut() = None;
+                if view.root.is_mapped() {
+                    view.set_mirror_status(
+                        "Analyse terminée (1 minute). Rouvrez les paramètres pour actualiser à nouveau.",
+                    );
+                }
+                return glib::ControlFlow::Break;
             }
+
+            view.refresh_mirrors_if_idle();
             glib::ControlFlow::Continue
         });
         *self.refresh_source.borrow_mut() = Some(source);
@@ -316,7 +330,7 @@ impl SettingsView {
             self.set_mirror_status("Aucun miroir retourné par Reflector.");
         } else {
             self.set_mirror_status(&format!(
-                "{} miroir(s) analysé(s) · actualisation automatique active.",
+                "{} miroir(s) analysé(s) · actualisation automatique (1 min max).",
                 mirrors.len()
             ));
         }
