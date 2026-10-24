@@ -1076,7 +1076,7 @@ dependencies = [
 
 [[package]]
 name = "noos-package-manager"
-version = "0.1.10"
+version = "0.1.11"
 dependencies = [
  "async-channel",
  "crossterm",
