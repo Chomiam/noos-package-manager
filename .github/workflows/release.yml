@@ -1,0 +1,255 @@
+name: Release
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Construire et contrôler le paquet
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:base-devel@sha256:3cbf69d2d5958d6a294f3722c5668e6187c4df8e00fa27f72352f0bf83e495e1
+    outputs:
+      hashes: ${{ steps.hashes.outputs.hashes }}
+    steps:
+      - name: Checkout main (PKGBUILD avec sommes à jour)
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: main
+          fetch-depth: 1
+
+      - name: Installer les outils
+        run: |
+          pacman -Sy --noconfirm archlinux-keyring || true
+          pacman -Syu --noconfirm --needed \
+            base-devel git curl libarchive \
+            cargo rust namcap checksec cargo-audit cargo-auditable syft \
+            meson ninja vala gobject-introspection gi-docgen glib2-devel sassc \
+            gtk4 appstream fribidi graphene pango
+
+      - name: Cache libAdapta
+        uses: actions/cache@d4323d4df104b026a6aa633fdb11d772146be0bf # v4.2.2
+        with:
+          path: /var/cache/libadapta-ci
+          key: libadapta-${{ runner.arch }}-3cbf69d2-a797378f0282933d85e125ceaccc150bc3a00ed0
+
+      - name: Installer libAdapta
+        run: ./.github/scripts/install-libadapta.sh
+
+      - name: Vérifier la version et les sommes
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          VERSION="${TAG#v}"
+          PKGVER="$(grep -m1 '^pkgver=' PKGBUILD | cut -d= -f2)"
+          [[ "$PKGVER" == "$VERSION" ]] || {
+            echo "pkgver=$PKGVER ne correspond pas au tag $TAG" >&2
+            exit 1
+          }
+          if grep -q "b2sums=('SKIP')" PKGBUILD; then
+            echo "b2sums n'a pas été renseigné pour $TAG" >&2
+            exit 1
+          fi
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+
+      - name: Construire le paquet
+        run: |
+          set -euo pipefail
+          id builder >/dev/null 2>&1 || useradd -m builder
+          chown -R builder:builder "$GITHUB_WORKSPACE"
+          su - builder -c "cd '$GITHUB_WORKSPACE' && makepkg --nodeps --nocheck --noconfirm"
+
+      - name: Namcap
+        run: |
+          set -euo pipefail
+          PKG="$(ls -1 noos-package-manager-*.pkg.tar.zst | grep -v debug | head -1)"
+          echo "PKG=$PKG" >> "$GITHUB_ENV"
+          namcap PKGBUILD | tee namcap-pkgbuild.txt
+          if grep -qE ' E: ' namcap-pkgbuild.txt; then
+            echo "Namcap a signalé une erreur sur le PKGBUILD." >&2
+            exit 1
+          fi
+          namcap "$PKG" | tee namcap-package.txt
+          if grep -qE ' E: ' namcap-package.txt; then
+            echo "Namcap a signalé une erreur sur le paquet." >&2
+            exit 1
+          fi
+
+      - name: Checksec
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/pkg-check
+          bsdtar -xf "$PKG" -C /tmp/pkg-check
+          chmod +x /tmp/pkg-check/usr/bin/noos-package-manager
+          checksec file --no-banner \
+            --fail-if=relro,pie,canary,nx,rpath,runpath,symbols \
+            /tmp/pkg-check/usr/bin/noos-package-manager
+          checksec file --no-banner --output=json \
+            /tmp/pkg-check/usr/bin/noos-package-manager > checksec.json
+
+      - name: Audit des dépendances Rust
+        run: |
+          set -euo pipefail
+          cargo audit --deny warnings
+          cargo audit -D warnings bin \
+            "src/noos-package-manager-${VERSION}/target/release/noos-package-manager"
+
+      - name: Générer le SBOM (SPDX)
+        run: |
+          set -euo pipefail
+          syft "dir:src/noos-package-manager-${VERSION}" \
+            --exclude './target/**' \
+            -o "spdx-json=sbom.spdx.json"
+          python3 - <<'PY'
+          import json
+          data = json.load(open("sbom.spdx.json"))
+          assert data.get("spdxVersion") == "SPDX-2.3"
+          assert len(data.get("packages", [])) > 100
+          print(f"SBOM SPDX avec {len(data['packages'])} paquets")
+          PY
+
+      - name: Calculer les empreintes SLSA
+        id: hashes
+        run: |
+          set -euo pipefail
+          sha256sum "$PKG" sbom.spdx.json > hashes.txt
+          b2sum "$PKG" sbom.spdx.json > b2sums.txt
+          echo "hashes=$(base64 -w0 hashes.txt)" >> "$GITHUB_OUTPUT"
+
+      - name: Archiver les résultats
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-assets
+          path: |
+            noos-package-manager-*.pkg.tar.zst
+            sbom.spdx.json
+            hashes.txt
+            b2sums.txt
+            namcap-pkgbuild.txt
+            namcap-package.txt
+            checksec.json
+
+  provenance:
+    name: Provenance SLSA
+    needs: build
+    permissions:
+      actions: read
+      id-token: write
+      contents: write
+    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@f7dd8c54c2067bafc12ca7a55595d5ee9b75204a # v2.1.0
+    with:
+      base64-subjects: ${{ needs.build.outputs.hashes }}
+      provenance-name: noos-package-manager-${{ github.event.release.tag_name }}.intoto.jsonl
+      upload-assets: true
+      upload-tag-name: ${{ github.event.release.tag_name }}
+
+  release-assets:
+    name: Attacher paquet et SBOM à la release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Télécharger les artefacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release-assets
+          path: release-assets
+
+      - name: Publier les fichiers
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          gh release upload "$TAG" \
+            release-assets/noos-package-manager-*.pkg.tar.zst \
+            release-assets/sbom.spdx.json \
+            release-assets/hashes.txt \
+            release-assets/b2sums.txt \
+            --repo "$GITHUB_REPOSITORY" \
+            --clobber
+
+  publish-aur:
+    name: Publier sur l'AUR
+    needs: build
+    runs-on: ubuntu-latest
+    environment: aur
+    permissions:
+      contents: read
+    if: github.repository == 'Chomiam/noos-package-manager'
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: main
+          fetch-depth: 1
+
+      - name: Vérifier le tag et la somme BLAKE2
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          VERSION="${TAG#v}"
+          PKGVER="$(grep -m1 '^pkgver=' PKGBUILD | cut -d= -f2)"
+          PKGREL="$(grep -m1 '^pkgrel=' PKGBUILD | cut -d= -f2)"
+          [[ "$PKGVER" == "$VERSION" ]] || {
+            echo "pkgver=$PKGVER ne correspond pas au tag $TAG" >&2
+            exit 1
+          }
+          curl -fsSL \
+            "https://github.com/Chomiam/noos-package-manager/archive/refs/tags/${TAG}.tar.gz" \
+            -o source.tar.gz
+          B2="$(b2sum source.tar.gz | awk '{print $1}')"
+          grep -q "$B2" PKGBUILD || {
+            echo "La somme BLAKE2 du tarball ne correspond pas au PKGBUILD." >&2
+            exit 1
+          }
+          grep -q "b2sums = $B2" .SRCINFO || {
+            echo "Le .SRCINFO n'est pas synchronisé avec le PKGBUILD." >&2
+            exit 1
+          }
+
+      - name: Pousser vers l'AUR
+        env:
+          AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          VERSION="${TAG#v}"
+          PKGREL="$(grep -m1 '^pkgrel=' PKGBUILD | cut -d= -f2)"
+          if [[ -z "${AUR_SSH_PRIVATE_KEY:-}" ]]; then
+            echo "Secret AUR_SSH_PRIVATE_KEY absent." >&2
+            exit 1
+          fi
+
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$AUR_SSH_PRIVATE_KEY" > "$HOME/.ssh/aur"
+          chmod 600 "$HOME/.ssh/aur"
+          printf '%s\n' \
+            'aur.archlinux.org ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEuBKrPzbawxA/k2g6NcyV5jmqwJ2s+zpgZGZ7tpLIcN' \
+            'aur.archlinux.org ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQDKF9vAFWdgm9Bi8uc+tYRBmXASBb5cB5iZsB7LOWWFeBrLp3r14w0/9S2vozjgqY5sJLDPONWoTTaVTbhe3vwO8CBKZTEt1AcWxuXNlRnk9FliR1/eNB9uz/7y1R0+c1Md+P98AJJSJWKN12nqIDIhjl2S1vOUvm7FNY43fU2knIhEbHybhwWeg+0wxpKwcAd/JeL5i92Uv03MYftOToUijd1pqyVFdJvQFhqD4v3M157jxS5FTOBrccAEjT+zYmFyD8WvKUa9vUclRddNllmBJdy4NyLB8SvVZULUPrP3QOlmzemeKracTlVOUG1wsDbxknF1BwSCU7CmU6UFP90kpWIyz66bP0bl67QAvlIc52Yix7pKJPbw85+zykvnfl2mdROsaT8p8R9nwCdFsBc9IiD0NhPEHcyHRwB8fokXTajk2QnGhL+zP5KnkmXnyQYOCUYo3EKMXIlVOVbPDgRYYT/XqvBuzq5S9rrU70KoI/S5lDnFfx/+lPLdtcnnEPk=' \
+            > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/known_hosts"
+          export GIT_SSH_COMMAND="ssh -i $HOME/.ssh/aur -o IdentitiesOnly=yes -o UserKnownHostsFile=$HOME/.ssh/known_hosts"
+
+          git clone ssh://aur@aur.archlinux.org/noos-package-manager.git aur-repo
+          cp PKGBUILD .SRCINFO aur-repo/
+          cd aur-repo
+          if git diff --quiet; then
+            echo "L'AUR est déjà à jour pour $VERSION-$PKGREL."
+            exit 0
+          fi
+          git config user.name "Chomiam"
+          git config user.email "axel.valens@ik.me"
+          git add PKGBUILD .SRCINFO
+          git commit -m "upgpkg: noos-package-manager ${VERSION}-${PKGREL}"
+          git push origin master

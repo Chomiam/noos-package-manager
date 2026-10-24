@@ -4,6 +4,13 @@
 
 Il réunit au sein d'une seule interface fluide (compatible avec les thèmes GNOME et WhiteSur) les **dépôts officiels Pacman**, l'**Arch User Repository (AUR RPC v5 + `yay`)**, les applications **Flatpak / Flathub** ainsi que la gestion locale complète des **AppImages**, et inclut l'outil en ligne de commande **`noos-up`** propulsé par **Ratatui**.
 
+[![CI](https://github.com/Chomiam/noos-package-manager/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Chomiam/noos-package-manager/actions/workflows/ci.yml)
+[![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/Chomiam/noos-package-manager/badge)](https://scorecard.dev/viewer/?uri=github.com/Chomiam/noos-package-manager)
+[![AUR](https://img.shields.io/aur/version/noos-package-manager)](https://aur.archlinux.org/packages/noos-package-manager)
+[![Release](https://img.shields.io/github/v/release/Chomiam/noos-package-manager?display_name=tag)](https://github.com/Chomiam/noos-package-manager/releases)
+[![License](https://img.shields.io/github/license/Chomiam/noos-package-manager)](LICENSE)
+[![SLSA Build L3](https://img.shields.io/badge/SLSA-Build%20L3-4c1)](SECURITY.md)
+
 ---
 
 ## Aperçu Visuel (Captures d'écran)
@@ -136,9 +143,31 @@ cargo build --release
 Le projet respecte des règles strictes d'ingénierie Rust (aucun blocage du thread principal GTK4, gestion d'erreurs typée avec `thiserror`, zéro avertissement Clippy) :
 
 ```bash
-cargo test
+cargo test --frozen --all-features
 cargo clippy --all-targets -- -D warnings
+cargo audit --deny warnings
 ```
+
+La CI Arch Linux vérifie également `namcap` (PKGBUILD et paquet), `checksec`
+(Full RELRO, PIE, NX, stack canary) et `cargo audit bin` sur le binaire construit
+avec `cargo-auditable`.
+
+## Sécurité et provenance
+
+- **b2sums BLAKE2b-512** dans le `PKGBUILD` de l'AUR, vérifiées par `makepkg`.
+- **Provenance SLSA Build L3** générée par GitHub Actions et vérifiable avec
+  `slsa-verifier` pour les artefacts de release.
+- **SBOM SPDX 2.3** attaché à chaque release (`sbom.spdx.json`), exploitable
+  avec `syft`, `grype` ou `trivy`.
+- **Publication AUR automatisée** après validation de la version et de la somme
+  BLAKE2b du tarball source.
+- **Actions GitHub épinglées par SHA**, image de build Arch épinglée par digest,
+  Dependabot pour Cargo et GitHub Actions, et workflow OpenSSF Scorecard.
+- **Durcissement** : RELRO complet, PIE, NX, stack canary et `FORTIFY_SOURCE=3`
+  pour les dépendances C.
+
+Les commandes de vérification (provenance, sommes, SBOM) sont détaillées dans
+[SECURITY.md](SECURITY.md#vérifier-une-release).
 
 ---
 

@@ -1,0 +1,104 @@
+name: CI
+
+on:
+  push:
+    branches: [main, testing]
+  pull_request:
+    branches: [main, testing]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-and-test:
+    name: Build, tests et contrôles de sécurité
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:base-devel@sha256:3cbf69d2d5958d6a294f3722c5668e6187c4df8e00fa27f72352f0bf83e495e1
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Installer les outils
+        run: |
+          pacman -Sy --noconfirm archlinux-keyring || true
+          pacman -Syu --noconfirm --needed \
+            base-devel git curl libarchive \
+            cargo rust namcap checksec cargo-audit cargo-auditable syft \
+            meson ninja vala gobject-introspection gi-docgen glib2-devel sassc \
+            gtk4 appstream fribidi graphene pango
+
+      - name: Cache libAdapta
+        uses: actions/cache@d4323d4df104b026a6aa633fdb11d772146be0bf # v4.2.2
+        with:
+          path: /var/cache/libadapta-ci
+          key: libadapta-${{ runner.arch }}-3cbf69d2-a797378f0282933d85e125ceaccc150bc3a00ed0
+
+      - name: Installer libAdapta
+        run: ./.github/scripts/install-libadapta.sh
+
+      - name: Tests Rust
+        run: cargo test --frozen --all-features
+
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Audit des dépendances Rust
+        run: cargo audit --deny warnings
+
+      - name: Construire le paquet
+        run: |
+          set -euo pipefail
+          VERSION="$(grep -m1 '^pkgver=' PKGBUILD | cut -d= -f2)"
+          git archive --format=tar.gz \
+            --prefix="noos-package-manager-${VERSION}/" \
+            HEAD -o "noos-package-manager-${VERSION}.tar.gz"
+          id builder >/dev/null 2>&1 || useradd -m builder
+          chown -R builder:builder "$GITHUB_WORKSPACE"
+          su - builder -c "cd '$GITHUB_WORKSPACE' && makepkg --nodeps --nocheck --skipchecksums --noconfirm"
+
+      - name: Namcap
+        run: |
+          set -euo pipefail
+          PKG="$(ls -1 noos-package-manager-*.pkg.tar.zst | grep -v debug | head -1)"
+          namcap PKGBUILD | tee namcap-pkgbuild.txt
+          if grep -qE ' E: ' namcap-pkgbuild.txt; then
+            echo "Namcap a signalé une erreur sur le PKGBUILD." >&2
+            exit 1
+          fi
+          namcap "$PKG" | tee namcap-package.txt
+          if grep -qE ' E: ' namcap-package.txt; then
+            echo "Namcap a signalé une erreur sur le paquet." >&2
+            exit 1
+          fi
+
+      - name: Checksec
+        run: |
+          set -euo pipefail
+          PKG="$(ls -1 noos-package-manager-*.pkg.tar.zst | grep -v debug | head -1)"
+          mkdir -p /tmp/pkg-check
+          bsdtar -xf "$PKG" -C /tmp/pkg-check
+          chmod +x /tmp/pkg-check/usr/bin/noos-package-manager
+          checksec file --no-banner \
+            --fail-if=relro,pie,canary,nx,rpath,runpath,symbols \
+            /tmp/pkg-check/usr/bin/noos-package-manager
+
+      - name: Audit des dépendances embarquées
+        run: |
+          set -euo pipefail
+          VERSION="$(grep -m1 '^pkgver=' PKGBUILD | cut -d= -f2)"
+          cargo audit -D warnings bin \
+            "src/noos-package-manager-${VERSION}/target/release/noos-package-manager"
+
+      - name: Publier les rapports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: security-reports
+          path: |
+            namcap-pkgbuild.txt
+            namcap-package.txt
+          if-no-files-found: ignore

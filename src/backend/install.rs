@@ -109,7 +109,7 @@ pub async fn resolve_optional_dependencies(
     let aur_client = shared_aur_client();
 
     if !aur_targets.is_empty() {
-        if let Some(ref client) = aur_client {
+        if let Some(client) = aur_client {
             let refs: Vec<&str> = aur_targets.iter().map(String::as_str).collect();
             if let Ok(raw_pkgs) = client.fetch_raw_packages(&refs).await {
                 for pkg in raw_pkgs {
@@ -167,7 +167,7 @@ pub async fn resolve_optional_dependencies(
 
     let mut aur_info_map: HashMap<String, crate::backend::aur::AurRpcPackage> = HashMap::new();
     if !unknown_names.is_empty() {
-        if let Some(ref client) = aur_client {
+        if let Some(client) = aur_client {
             let refs: Vec<&str> = unknown_names.iter().map(String::as_str).collect();
             if let Ok(aur_pkgs) = client.fetch_raw_packages(&refs).await {
                 for p in aur_pkgs {

@@ -1,13 +1,13 @@
 pkgbase = noos-package-manager
 	pkgdesc = Gestionnaire de paquets GTK4/libAdapta et outil CLI (noos-up) pour Arch Linux (Pacman, AUR via Yay, Flatpak et AppImages)
-	pkgver = 0.1.12
+	pkgver = 0.1.13
 	pkgrel = 1
 	url = https://github.com/Chomiam/noos-package-manager
 	arch = x86_64
 	arch = aarch64
 	license = GPL-3.0-or-later
 	makedepends = cargo
-	makedepends = git
+	makedepends = cargo-auditable
 	depends = gtk4
 	depends = libadapta
 	depends = glibc
@@ -23,7 +23,8 @@ pkgbase = noos-package-manager
 	depends = reflector
 	depends = git
 	options = !lto
-	source = noos-package-manager-0.1.12.tar.gz::https://github.com/Chomiam/noos-package-manager/archive/refs/tags/v0.1.12.tar.gz
-	sha256sums = 32cdbb7c64e06a768d4f4fbcd3aaadcebf1cb1042e94da6fa244bd49f700d2dd
+	options = !debug
+	source = noos-package-manager-0.1.13.tar.gz::https://github.com/Chomiam/noos-package-manager/archive/refs/tags/v0.1.13.tar.gz
+	b2sums = SKIP
 
 pkgname = noos-package-manager
