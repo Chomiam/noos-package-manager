@@ -1,6 +1,6 @@
 # Maintainer: Chomiam <axel.valens@ik.me>
 pkgname=noos-package-manager
-pkgver=0.1.11
+pkgver=0.1.12
 pkgrel=1
 pkgdesc="Gestionnaire de paquets GTK4/libAdapta et outil CLI (noos-up) pour Arch Linux (Pacman, AUR via Yay, Flatpak et AppImages)"
 arch=('x86_64' 'aarch64')

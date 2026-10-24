@@ -37,6 +37,7 @@ Il réunit au sein d'une seule interface fluide (compatible avec les thèmes GNO
 - Sélecteur de tri dédié dans l'onglet AUR : *Popularité (par défaut)*, *Votes*, *Mis à jour récemment* et *Nom (A → Z)*.
 - Découverte paginée par vagues thématiques (wayland, hyprland, browser, vulkan, nvidia, gaming, etc.).
 - **Historique des versions** : un clic sur la version d'un paquet AUR ouvre la liste des versions précédentes extraites de l'historique git, avec installation directe de la version choisie (`yay -Bi`).
+- **Choix de build interactif** : les menus de fournisseurs (GTK3/GTK4, bibliothèques, etc.) et les questions des PKGBUILD s'affichent dans une fenêtre GTK dédiée ; Pacman reste non interactif pendant la transaction.
 
 ### Flatpak & Flathub (`flatpak` + API Flathub v2)
 - Recommandations Flathub par catégories combinant le cache local AppStream et l'API Flathub v2.
@@ -59,8 +60,10 @@ Il réunit au sein d'une seule interface fluide (compatible avec les thèmes GNO
 - **Services à redémarrer** : après une transaction Pacman/AUR, `needrestart -b` détecte les services utilisant d'anciennes bibliothèques. L'application propose de les redémarrer, liste les échecs avec leur statut et conseille un redémarrage complet si le noyau a été mis à jour.
 
 ### Paramètres intégrés (volet gauche)
-- **Miroirs Pacman via Reflector** : analyse des miroirs récents, mesure du débit, tri par vitesse, application des 5 meilleurs ou d'une sélection manuelle dans `/etc/pacman.d/mirrorlist`.
+- **Miroirs Pacman via Reflector** : analyse des miroirs récents, mesure du débit, tri par vitesse, tableau de 10 lignes défilable, application des 5 meilleurs ou d'une sélection manuelle dans `/etc/pacman.d/mirrorlist`.
 - **Cache Pacman** : affichage de l'espace utilisé par `/var/cache/pacman/pkg` et nettoyage avec `paccache -r` (les 3 dernières versions de chaque paquet sont conservées).
+- **Pacman** : réglage de `ParallelDownloads` (1 à 20) directement dans `/etc/pacman.conf`, avec sauvegarde et vérification par `pacman-conf`.
+- **Yay** : compilation multi-cœur (`MAKEFLAGS`), désactivation de la compression (`PKGEXT`), compilation en RAM (`BUILDDIR`) et interception des choix de build, appliqués par variables d'environnement à chaque transaction AUR.
 
 ### Commande CLI `noos-up` (Ratatui)
 - Utilitaire en ligne de commande avec interface **Ratatui** (`Viewport::Inline`) permettant de vérifier (`noos-up --check`) et d'appliquer (`noos-up`) en une seule commande toutes les mises à jour **Pacman**, **Yay (AUR)** et **Flatpak** avec badges colorés, barre de progression et flux temps réel.
