@@ -54,7 +54,17 @@ impl SettingsView {
 
         let mirror_table_rows = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
         mirror_table.append(&mirror_table_rows);
-        mirror_group.add(&mirror_table);
+
+        let mirror_table_scroll = gtk4::ScrolledWindow::builder()
+            .hscrollbar_policy(gtk4::PolicyType::Never)
+            .vscrollbar_policy(gtk4::PolicyType::Automatic)
+            .propagate_natural_height(true)
+            .max_content_height(430)
+            .kinetic_scrolling(true)
+            .child(&mirror_table)
+            .build();
+        mirror_table_scroll.add_css_class("mirror-table-scroll");
+        mirror_group.add(&mirror_table_scroll);
 
         let mirror_rows: Rc<RefCell<Vec<gtk4::Box>>> = Rc::new(RefCell::new(Vec::new()));
         let mirror_status = gtk4::Label::builder()

@@ -141,6 +141,11 @@ row.aur-pagination-row {
     background-color: alpha(@window_fg_color, 0.015);
 }
 
+.mirror-table-scroll {
+    border-radius: 10px;
+    background-color: transparent;
+}
+
 .mirror-table-header {
     padding: 7px 12px;
     background-color: alpha(@window_fg_color, 0.055);
