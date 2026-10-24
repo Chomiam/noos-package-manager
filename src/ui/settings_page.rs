@@ -64,11 +64,14 @@ impl SettingsView {
         let mirror_table_rows = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
         mirror_table.append(&mirror_table_rows);
 
+        // Hauteur fixe pour afficher environ 10 miroirs ; au-delà, la liste
+        // défile verticalement.
         let mirror_table_scroll = gtk4::ScrolledWindow::builder()
             .hscrollbar_policy(gtk4::PolicyType::Never)
             .vscrollbar_policy(gtk4::PolicyType::Automatic)
             .propagate_natural_height(true)
-            .max_content_height(430)
+            .min_content_height(440)
+            .max_content_height(440)
             .kinetic_scrolling(true)
             .child(&mirror_table)
             .build();
