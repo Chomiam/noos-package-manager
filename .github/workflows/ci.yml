@@ -33,6 +33,7 @@ jobs:
 
       - name: Cache libAdapta
         uses: actions/cache@d4323d4df104b026a6aa633fdb11d772146be0bf # v4.2.2
+        continue-on-error: true
         with:
           path: /var/cache/libadapta-ci
           key: libadapta-${{ runner.arch }}-3cbf69d2-a797378f0282933d85e125ceaccc150bc3a00ed0
