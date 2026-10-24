@@ -22,6 +22,7 @@ pkgbase = noos-package-manager
 	depends = needrestart
 	depends = reflector
 	depends = git
+	options = !lto
 	source = noos-package-manager-0.1.12.tar.gz::https://github.com/Chomiam/noos-package-manager/archive/refs/tags/v0.1.12.tar.gz
 	sha256sums = 32cdbb7c64e06a768d4f4fbcd3aaadcebf1cb1042e94da6fa244bd49f700d2dd
 

@@ -6,6 +6,7 @@ pkgdesc="Gestionnaire de paquets GTK4/libAdapta et outil CLI (noos-up) pour Arch
 arch=('x86_64' 'aarch64')
 url="https://github.com/Chomiam/noos-package-manager"
 license=('GPL-3.0-or-later')
+options=(!lto)
 depends=(
   'gtk4'
   'libadapta'
