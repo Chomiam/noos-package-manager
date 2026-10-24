@@ -255,6 +255,45 @@ pub async fn resolve_optional_dependencies(
     Ok(results)
 }
 
+
+/// Vérifie avec needrestart les services à redémarrer après une transaction.
+///
+/// Le résultat est envoyé à l'interface seulement s'il y a quelque chose à signaler.
+async fn prepare_service_restart_check(
+    elevation: &Elevation,
+    ui_tx: &async_channel::Sender<UiEvent>,
+) -> Option<crate::backend::needrestart::NeedrestartReport> {
+    let _ = ui_tx
+        .send(UiEvent::InstallProgress {
+            phase: String::from("Vérification des services à redémarrer (needrestart)…"),
+            fraction: 0.99,
+            active_package: None,
+            log_line: Some(String::from(
+                "Analyse des bibliothèques obsolètes avec `needrestart -b`…",
+            )),
+        })
+        .await;
+
+    match crate::backend::needrestart::detect(elevation).await {
+        Ok(report) => {
+            if report.services.is_empty()
+                && !crate::backend::needrestart::reboot_recommended(report.kernel_status)
+            {
+                None
+            } else {
+                Some(report)
+            }
+        }
+        Err(err) => {
+            crate::backend::logging::log_warn(
+                "needrestart",
+                format!("Vérification des services ignorée : {err}"),
+            );
+            None
+        }
+    }
+}
+
 /// Exécute l'installation d'un lot de paquets (Pacman, AUR et/ou Flatpak) avec résolution préalable
 /// des dépendances et diffusion temps réel de la progression au Gestionnaire d'installation.
 pub async fn install_batch_with_progress(
@@ -554,6 +593,12 @@ pub async fn install_batch_with_progress(
         sync_self_installed_binaries();
     }
 
+    let service_report = if !pacman_targets.is_empty() || !aur_targets.is_empty() {
+        prepare_service_restart_check(&elevation, ui_tx).await
+    } else {
+        None
+    };
+
     let final_msg = if summary_messages.is_empty() {
         String::from("Installation terminée et vérifiée avec succès.")
     } else {
@@ -567,6 +612,15 @@ pub async fn install_batch_with_progress(
             installed_ids,
         })
         .await;
+
+    if let Some(report) = service_report {
+        let _ = ui_tx
+            .send(UiEvent::ServicesNeedRestart {
+                services: report.services,
+                kernel_status: report.kernel_status,
+            })
+            .await;
+    }
 }
 
 /// Synchronise de façon atomique les binaires `/usr/bin/noos-package-manager` et `/usr/bin/noos-up`
@@ -647,6 +701,7 @@ pub async fn load_more_aur_discovery_wave(wave_index: usize) -> Vec<PackageItem>
 /// AUR (via `yay`) et Flatpak (`flatpak update`) avec suivi dans le Gestionnaire d'installation.
 pub async fn update_all_system_and_aur_with_progress(
     catalog_update_items: &[PackageItem],
+    ignored_updates: &[String],
     cancel_handle: &InstallCancelHandle,
     ui_tx: &async_channel::Sender<UiEvent>,
 ) {
@@ -708,6 +763,21 @@ pub async fn update_all_system_and_aur_with_progress(
             }
         }
     }
+
+    let ignored: HashSet<&str> = ignored_updates.iter().map(String::as_str).collect();
+    pacman_updates.retain(|name, _| {
+        let pacman_id = format!("pacman:{name}");
+        let aur_id = format!("aur:{name}");
+        !ignored.contains(pacman_id.as_str()) && !ignored.contains(aur_id.as_str())
+    });
+    aur_updates.retain(|name, _| {
+        let aur_id = format!("aur:{name}");
+        !ignored.contains(aur_id.as_str())
+    });
+    flatpak_updates.retain(|app_id, _| {
+        let flatpak_id = format!("flatpak:{app_id}");
+        !ignored.contains(flatpak_id.as_str())
+    });
 
     let mut updated_ids = Vec::new();
     let mut dep_steps = Vec::new();
@@ -915,6 +985,12 @@ pub async fn update_all_system_and_aur_with_progress(
         sync_self_installed_binaries();
     }
 
+    let service_report = if has_pacman_updates || has_aur_updates {
+        prepare_service_restart_check(&elevation, ui_tx).await
+    } else {
+        None
+    };
+
     let final_msg = if summaries.is_empty() {
         String::from("Système Pacman, AUR et Flatpak entièrement mis à jour.")
     } else {
@@ -928,4 +1004,13 @@ pub async fn update_all_system_and_aur_with_progress(
             installed_ids: updated_ids,
         })
         .await;
+
+    if let Some(report) = service_report {
+        let _ = ui_tx
+            .send(UiEvent::ServicesNeedRestart {
+                services: report.services,
+                kernel_status: report.kernel_status,
+            })
+            .await;
+    }
 }

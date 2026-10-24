@@ -18,6 +18,9 @@ depends=(
   'flatpak'
   'polkit'
   'hicolor-icon-theme'
+  'needrestart'
+  'reflector'
+  'git'
 )
 makedepends=(
   'cargo'

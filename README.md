@@ -36,6 +36,7 @@ Il réunit au sein d'une seule interface fluide (compatible avec les thèmes GNO
 - Affichage tabulaire aligné en colonnes : **Votes (`★`)**, **Popularité**, **Mainteneur** (avec détection des paquets orphelins), **Date de dernière mise à jour**, **Version** et badge d'alerte **Obsolète (`Out-of-Date`)**.
 - Sélecteur de tri dédié dans l'onglet AUR : *Popularité (par défaut)*, *Votes*, *Mis à jour récemment* et *Nom (A → Z)*.
 - Découverte paginée par vagues thématiques (wayland, hyprland, browser, vulkan, nvidia, gaming, etc.).
+- **Historique des versions** : un clic sur la version d'un paquet AUR ouvre la liste des versions précédentes extraites de l'historique git, avec installation directe de la version choisie (`yay -Bi`).
 
 ### Flatpak & Flathub (`flatpak` + API Flathub v2)
 - Recommandations Flathub par catégories combinant le cache local AppStream et l'API Flathub v2.
@@ -54,6 +55,12 @@ Il réunit au sein d'une seule interface fluide (compatible avec les thèmes GNO
 - **Cache local instantané & Différentiel incrémental** : démarrage immédiat depuis `~/.cache/noos-package-manager/catalog_cache_v1.json`, calcul uniquement des différences locales (`pacman -Q` / `-Qqe` / `-Qqm`) et actualisation asynchrone des mises à jour en arrière-plan.
 - Vérification simultanée et affichage par sections dédiées (**Pacman**, **AUR**, **Flatpak**, **AppImages**) des mises à jour disponibles (`checkupdates`, `yay -Qua`, `flatpak remote-ls --updates`, GitHub Releases).
 - Détection automatique des mises à jour de `noos-package-manager` lui-même sur l'AUR avec synchronisation atomique des binaires et **redémarrage automatique** de l'application une fois sa mise à jour appliquée.
+- **Mises à jour ignorées** : bouton pour ignorer un paquet dans l'onglet Mises à jour, liste dédiée des paquets ignorés et réactivation à la demande. La sélection est conservée dans `~/.config/noos-package-manager/settings.json` et exclue de « Tout mettre à jour ».
+- **Services à redémarrer** : après une transaction Pacman/AUR, `needrestart -b` détecte les services utilisant d'anciennes bibliothèques. L'application propose de les redémarrer, liste les échecs avec leur statut et conseille un redémarrage complet si le noyau a été mis à jour.
+
+### Paramètres intégrés (volet gauche)
+- **Miroirs Pacman via Reflector** : analyse des miroirs récents, mesure du débit, tri par vitesse, application des 5 meilleurs ou d'une sélection manuelle dans `/etc/pacman.d/mirrorlist`.
+- **Cache Pacman** : affichage de l'espace utilisé par `/var/cache/pacman/pkg` et nettoyage avec `paccache -r` (les 3 dernières versions de chaque paquet sont conservées).
 
 ### Commande CLI `noos-up` (Ratatui)
 - Utilitaire en ligne de commande avec interface **Ratatui** (`Viewport::Inline`) permettant de vérifier (`noos-up --check`) et d'appliquer (`noos-up`) en une seule commande toutes les mises à jour **Pacman**, **Yay (AUR)** et **Flatpak** avec badges colorés, barre de progression et flux temps réel.
@@ -106,8 +113,10 @@ noos-up --help
 
 #### Prérequis système (Arch Linux)
 ```bash
-sudo pacman -S --needed rust cargo gtk4 libadwaita pacman-contrib flatpak polkit sudo git
+sudo pacman -S --needed rust cargo gtk4 libadwaita pacman-contrib flatpak polkit sudo reflector git
 ```
+
+`needrestart` (détection des services à redémarrer) est disponible dans l'AUR / chaotic-aur ; il est déclaré comme dépendance du paquet AUR.
 
 #### Compilation et exécution
 ```bash
@@ -146,6 +155,10 @@ src/
 │   ├── pacman.rs           # Interactions avec pacman / checkupdates
 │   ├── elevation.rs        # Session sudo unique + assistant askpass par opération
 │   ├── aur.rs              # Client AUR RPC v5 partagé + intégration yay
+│   ├── aur_versions.rs     # Historique git des versions AUR et installation
+│   ├── needrestart.rs      # Détection/redémarrage des services après mise à jour
+│   ├── reflector.rs        # Analyse et application des miroirs Pacman
+│   ├── settings.rs         # Configuration locale (mises à jour ignorées)
 │   ├── flatpak.rs          # Intégration Flatpak / Flathub
 │   ├── appimage.rs         # Gestion locale des AppImages
 │   ├── details.rs          # Fiches détaillées des paquets
@@ -155,6 +168,8 @@ src/
     ├── mod.rs
     ├── window.rs           # Fenêtre principale (GTK4 / Libadwaita)
     ├── askpass.rs          # Assistant graphique de mot de passe (sudo -A)
+    ├── settings_page.rs    # Page Paramètres (Reflector, cache Pacman)
+    ├── aur_versions_dialog.rs # Fenêtre de choix des versions antérieures AUR
     ├── sidebar.rs          # Volet latéral
     ├── row.rs              # Lignes de paquets et colonnes AUR
     ├── icons.rs            # Résolution des icônes (WhiteSur, hicolor, breeze)

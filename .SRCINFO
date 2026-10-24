@@ -19,6 +19,9 @@ pkgbase = noos-package-manager
 	depends = flatpak
 	depends = polkit
 	depends = hicolor-icon-theme
+	depends = needrestart
+	depends = reflector
+	depends = git
 	source = noos-package-manager-0.1.10.tar.gz::https://github.com/Chomiam/noos-package-manager/archive/refs/tags/v0.1.10.tar.gz
 	sha256sums = 82558b8c75f09f6d01eb63d1f6c87b6dc2095c61848abab0ce985330fccb0edc
 

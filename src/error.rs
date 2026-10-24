@@ -20,6 +20,12 @@ pub enum AppError {
     #[error("Erreur Flatpak / Flathub : {0}")]
     FlatpakError(String),
 
+    #[error("Erreur Reflector : {0}")]
+    ReflectorError(String),
+
+    #[error("Erreur needrestart : {0}")]
+    NeedrestartError(String),
+
     #[error("Erreur AppImage : {0}")]
     AppImageError(String),
 

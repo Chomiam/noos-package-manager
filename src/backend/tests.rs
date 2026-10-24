@@ -12,6 +12,9 @@ use crate::backend::appimage::{
 use crate::backend::aur::{
     build_info_url, build_search_url, detect_aur_helper_in_dirs, parse_aur_rpc_json,
 };
+use crate::backend::aur_versions::parse_pkgbuild_version;
+use crate::backend::needrestart::{parse_batch_output as parse_needrestart_batch, reboot_recommended};
+use crate::backend::reflector::parse_reflector_output;
 use crate::backend::details::{
     extract_github_from_url, markdown_to_pango_markup, parse_pacman_detail_fields,
     resolve_github_owner_repo,
@@ -803,4 +806,76 @@ fn test_sudo_elevation_keeps_password_out_of_yay_env() -> TestResult {
     assert!(syntax.success(), "le wrapper sudo doit être un script valide");
 
     Ok(())
+}
+
+
+#[test]
+fn test_needrestart_batch_parsing() {
+    let sample = "\
+NEEDRESTART-VER: 3.11
+NEEDRESTART-KCUR: 6.12.1-arch1-1
+NEEDRESTART-KEXP: 6.12.1-arch1-1
+NEEDRESTART-KSTA: 2
+NEEDRESTART-SVC: sshd.service
+NEEDRESTART-SVC: systemd-journald.service
+NEEDRESTART-SESS: user @ session #1
+";
+    let report = parse_needrestart_batch(sample);
+    assert_eq!(report.kernel_status, Some(2));
+    assert_eq!(
+        report.services,
+        vec![
+            String::from("sshd.service"),
+            String::from("systemd-journald.service")
+        ]
+    );
+    assert!(reboot_recommended(report.kernel_status));
+    assert!(!reboot_recommended(Some(1)));
+}
+
+#[test]
+fn test_reflector_output_parsing() {
+    let stdout = "\
+http://mirrors.niyawe.de/archlinux/$repo/os/$arch
+active          : True
+country         : Germany
+protocol        : http
+delay           : 219
+
+https://berlin.mirror.pkgbuild.com/$repo/os/$arch
+active          : True
+country         : Germany
+protocol        : https
+delay           : 68
+";
+    let stderr = "\
+[2026-10-24 10:48:19] INFO: rating 2 mirror(s) by download speed
+[2026-10-24 10:48:20] INFO: http://mirrors.niyawe.de/archlinux/  30300.32 KiB/s     0.29 s
+[2026-10-24 10:48:22] INFO: https://berlin.mirror.pkgbuild.com/  28520.93 KiB/s     0.30 s
+";
+    let mirrors = parse_reflector_output(stdout, stderr);
+    assert_eq!(mirrors.len(), 2);
+    assert_eq!(mirrors[0].url, "http://mirrors.niyawe.de/archlinux");
+    assert_eq!(mirrors[0].country, "Germany");
+    assert_eq!(mirrors[0].rate_kib_s, 30300.32);
+    assert_eq!(mirrors[1].url, "https://berlin.mirror.pkgbuild.com");
+    assert_eq!(mirrors[1].protocol, "https");
+}
+
+#[test]
+fn test_aur_pkgbuild_version_parsing() {
+    let pkgbuild = "\
+pkgname=example-bin
+_pkgver=1.2.3
+pkgver=${_pkgver}
+pkgrel=2
+epoch=1
+";
+    assert_eq!(
+        parse_pkgbuild_version(pkgbuild).as_deref(),
+        Some("1:1.2.3-2")
+    );
+
+    let no_version = "pkgname=broken\nbuild() { :; }\n";
+    assert_eq!(parse_pkgbuild_version(no_version), None);
 }

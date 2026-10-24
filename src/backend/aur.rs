@@ -736,18 +736,18 @@ fn try_spawn_terminal_aur_command(helper_bin: &str, pkg_name: &str) -> AppResult
     )))
 }
 /// Paramètres d'une transaction yay en streaming.
-struct YayTransaction<'a> {
-    yay_args: &'a [&'a str],
-    targets: &'a [String],
-    phase: String,
-    action_label: &'a str,
+pub(crate) struct YayTransaction<'a> {
+    pub(crate) yay_args: &'a [&'a str],
+    pub(crate) targets: &'a [String],
+    pub(crate) phase: String,
+    pub(crate) success_message: String,
 }
 
 /// Exécute une transaction `yay` en streaming (installation ou mise à jour).
 ///
 /// Le lancement via `--sudoloop` garantit qu'une seule authentification sudo est
 /// demandée, y compris lorsque la transaction installe des paquets Pacman et AUR.
-async fn run_yay_transaction_streaming(
+pub(crate) async fn run_yay_transaction_streaming(
     transaction: YayTransaction<'_>,
     known_deps: &[String],
     elevation: &Elevation,
@@ -890,20 +890,7 @@ async fn run_yay_transaction_streaming(
     };
 
     if status.success() {
-        if transaction.targets.is_empty() {
-            Ok(format!(
-                "{} terminée avec succès via {}.",
-                transaction.action_label,
-                helper.display_name()
-            ))
-        } else {
-            Ok(format!(
-                "{} paquet(s) {} installés/mis à jour avec succès via {}.",
-                transaction.targets.len(),
-                transaction.action_label,
-                helper.display_name()
-            ))
-        }
+        Ok(transaction.success_message)
     } else {
         if elevation.authentication_was_cancelled() {
             return Err(AppError::AurHelperError(String::from(
@@ -939,7 +926,10 @@ pub async fn install_aur_packages_streaming(
                 "Installation de {} paquet(s) AUR via yay (une seule authentification)…",
                 targets.len()
             ),
-            action_label: "AUR",
+            success_message: format!(
+                "{} paquet(s) AUR installés/mis à jour avec succès via yay.",
+                targets.len()
+            ),
         },
         known_deps,
         elevation,
@@ -969,7 +959,10 @@ pub async fn install_mixed_packages_streaming(
                 "Installation de {} paquet(s) Pacman et AUR via yay (une seule authentification)…",
                 targets.len()
             ),
-            action_label: "Pacman et AUR",
+            success_message: format!(
+                "{} paquet(s) Pacman et AUR installés/mis à jour avec succès via yay.",
+                targets.len()
+            ),
         },
         known_deps,
         elevation,
@@ -993,7 +986,9 @@ pub async fn update_all_via_yay_streaming(
             phase: String::from(
                 "Mise à jour globale Pacman + AUR via yay (une seule authentification)…",
             ),
-            action_label: "Mise à jour Pacman + AUR",
+            success_message: String::from(
+                "Mise à jour Pacman + AUR terminée avec succès via yay.",
+            ),
         },
         known_deps,
         elevation,

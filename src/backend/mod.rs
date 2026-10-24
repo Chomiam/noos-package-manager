@@ -1,5 +1,6 @@
 pub mod appimage;
 pub mod aur;
+pub mod aur_versions;
 pub mod cache;
 pub mod catalog;
 pub mod details;
@@ -8,8 +9,11 @@ pub mod flatpak;
 pub mod install;
 pub mod logging;
 pub mod models;
+pub mod needrestart;
 pub mod pacman;
+pub mod reflector;
 pub mod search;
+pub mod settings;
 
 #[cfg(test)]
 mod tests;

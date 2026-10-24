@@ -102,7 +102,8 @@ pub fn build_aur_columns_header_row() -> gtk4::ListBoxRow {
         .build()
 }
 
-pub fn build_package_action_row<F, I>(
+#[allow(clippy::too_many_arguments)]
+pub fn build_package_action_row<F, I, V>(
     item: &PackageItem,
     is_checked: bool,
     show_source_badge: bool,
@@ -110,10 +111,12 @@ pub fn build_package_action_row<F, I>(
     cmd_tx: &Sender<BackendCommand>,
     on_check_changed: F,
     on_info_clicked: I,
+    on_version_clicked: V,
 ) -> adw::ActionRow
 where
     F: Fn(bool) + 'static,
     I: Fn() + 'static,
+    V: Fn() + 'static,
 {
     let is_aur_row = use_aur_columns && item.aur_meta.is_some();
     let escaped_title = gtk4::glib::markup_escape_text(&item.name);
@@ -291,7 +294,7 @@ where
             .build();
         suffix_box.append(&wrap_in_fixed_column(&date_lbl, COL_UPDATED_WIDTH));
 
-        // Colonne 5 : Version
+        // Colonne 5 : Version (cliquable pour afficher l'historique AUR)
         let ver_label = if let Some(ref new_ver) = item.update_available {
             let ver_text = format!("{} → {}", item.version, new_ver);
             gtk4::Label::builder()
@@ -318,7 +321,14 @@ where
                 .css_classes(["version-pill"])
                 .build()
         };
-        suffix_box.append(&wrap_in_fixed_column(&ver_label, COL_VERSION_WIDTH));
+
+        let ver_button = gtk4::Button::builder()
+            .css_classes(["flat", "version-pill-button"])
+            .tooltip_text("Cliquer pour afficher les versions précédentes de ce paquet AUR")
+            .build();
+        ver_button.set_child(Some(&ver_label));
+        ver_button.connect_clicked(move |_| on_version_clicked());
+        suffix_box.append(&wrap_in_fixed_column(&ver_button, COL_VERSION_WIDTH));
     } else {
         if let Some(ref new_ver) = item.update_available {
             let ver_text = format!("{} → {}", item.version, new_ver);

@@ -1,6 +1,7 @@
 use crate::backend::details::PackageDetailedInfo;
 use crate::backend::models::{
-    DependencyStatus, DependencyStepItem, OptionalDependencyItem, PackageItem, PackageSource,
+    AurVersionInfo, DependencyStatus, DependencyStepItem, OptionalDependencyItem, PackageItem,
+    PackageSource, ReflectorMirror, ServiceRestartFailure,
 };
 use crate::backend::pacman::PacmanLockInfo;
 use crate::backend::CatalogSnapshot;
@@ -52,9 +53,30 @@ pub enum BackendCommand {
     },
     UpdateAllSystem {
         items: Vec<PackageItem>,
+        ignored: Vec<String>,
     },
     LoadMoreAurPackages {
         wave_index: usize,
+    },
+    FetchAurVersions {
+        package: String,
+    },
+    InstallAurVersion {
+        package: String,
+        package_base: String,
+        version: String,
+        commit: String,
+    },
+    CheckServices,
+    ListReflectorMirrors,
+    ApplyMirrorlist {
+        servers: Vec<String>,
+    },
+    GetPacmanCacheSize,
+    CleanPacmanCache,
+    RestartServices {
+        services: Vec<String>,
+        kernel_status: Option<u32>,
     },
 }
 
@@ -112,5 +134,30 @@ pub enum UiEvent {
     PacmanLockCleared,
     PacmanLockRepaired {
         message: String,
+    },
+    CatalogReloadRequested,
+    AurVersionsLoaded {
+        package: String,
+        package_base: String,
+        versions: Vec<AurVersionInfo>,
+    },
+    AurVersionsError(String),
+    MirrorListLoaded(Vec<ReflectorMirror>),
+    MirrorListApplied {
+        message: String,
+    },
+    ReflectorError(String),
+    PacmanCacheSize {
+        bytes: u64,
+    },
+    PacmanCacheError(String),
+    ServicesNeedRestart {
+        services: Vec<String>,
+        kernel_status: Option<u32>,
+    },
+    ServicesRestarted {
+        restarted: Vec<String>,
+        failures: Vec<ServiceRestartFailure>,
+        kernel_status: Option<u32>,
     },
 }

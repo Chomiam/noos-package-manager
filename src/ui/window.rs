@@ -1,5 +1,5 @@
 use std::cell::RefCell;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
@@ -11,14 +11,17 @@ use libadwaita as adw;
 use libadwaita::prelude::*;
 
 use crate::backend;
+use crate::backend::elevation::Elevation;
 use crate::backend::models::{
     AurHelper, AurSortMode, InstallCancelHandle, PackageItem, PackageSource,
     RecommendationCategory, SidebarCategory,
 };
+use crate::ui::aur_versions_dialog::AurVersionsDialog;
 use crate::ui::details_dialog::PackageDetailsDialog;
 use crate::ui::install_dialog::InstallManagerUi;
 use crate::ui::messages::{BackendCommand, UiEvent};
 use crate::ui::row::{build_aur_columns_header_row, build_package_action_row};
+use crate::ui::settings_page::SettingsView;
 
 const MAX_RENDERED_ROWS: usize = 250;
 const AUR_PAGE_SIZE: usize = 8;
@@ -54,6 +57,10 @@ struct AppUiState {
     notifications: Vec<String>,
     /// Nombre de notifications non lues (affiché sur la cloche).
     notification_unread: usize,
+    /// Paquets dont les mises à jour sont ignorées par l'utilisateur.
+    ignored_updates: BTreeSet<String>,
+    /// Statut noyau retourné par needrestart lors de la dernière mise à jour.
+    pending_kernel_status: Option<u32>,
 }
 
 struct SidebarRowWidgets {
@@ -85,6 +92,8 @@ struct HeaderActionButtons {
     loading_status_page: adw::StatusPage,
     empty_check_updates_btn: gtk4::Button,
     details_dialog: PackageDetailsDialog,
+    aur_versions_dialog: AurVersionsDialog,
+    settings_view: SettingsView,
 }
 
 pub fn build_main_window(app: &adw::Application) -> adw::ApplicationWindow {
@@ -94,8 +103,10 @@ pub fn build_main_window(app: &adw::Application) -> adw::ApplicationWindow {
 
     spawn_backend_worker(cmd_rx, ui_tx, Arc::clone(&cancel_handle));
 
+    let saved_settings = backend::settings::load_settings();
     let state = Rc::new(RefCell::new(AppUiState {
         aur_next_wave_index: backend::aur::INITIAL_AUR_DISCOVERY_WAVES_COUNT,
+        ignored_updates: saved_settings.ignored_updates,
         ..AppUiState::default()
     }));
 
@@ -194,10 +205,33 @@ pub fn build_main_window(app: &adw::Application) -> adw::ApplicationWindow {
         ))
         .build();
 
-    let sidebar_footer = gtk4::Box::builder()
-        .orientation(gtk4::Orientation::Horizontal)
-        .halign(gtk4::Align::Start)
+    let settings_button = gtk4::Button::builder()
+        .css_classes(["flat"])
+        .halign(gtk4::Align::Fill)
+        .tooltip_text("Ouvrir les paramètres de l'application")
         .build();
+
+    let settings_content = gtk4::Box::builder()
+        .orientation(gtk4::Orientation::Horizontal)
+        .spacing(10)
+        .margin_start(6)
+        .margin_end(6)
+        .build();
+    let settings_icon = gtk4::Image::from_icon_name("emblem-system-symbolic");
+    let settings_label = gtk4::Label::builder()
+        .label("Paramètres")
+        .xalign(0.0)
+        .hexpand(true)
+        .build();
+    settings_content.append(&settings_icon);
+    settings_content.append(&settings_label);
+    settings_button.set_child(Some(&settings_content));
+
+    let sidebar_footer = gtk4::Box::builder()
+        .orientation(gtk4::Orientation::Vertical)
+        .spacing(2)
+        .build();
+    sidebar_footer.append(&settings_button);
     sidebar_footer.append(&version_label);
     sidebar_toolbar.add_bottom_bar(&sidebar_footer);
 
@@ -383,6 +417,21 @@ pub fn build_main_window(app: &adw::Application) -> adw::ApplicationWindow {
     split_view.set_sidebar(Some(&sidebar_page));
     split_view.set_content(Some(&content_page));
 
+    {
+        let stack = content_stack.clone();
+        let nav = content_page.clone();
+        let list = sidebar_list.clone();
+        let header_title = app_header_title.clone();
+        settings_button.connect_clicked(move |_| {
+            list.unselect_all();
+            nav.set_title("Paramètres");
+            header_title.set_label("Paramètres");
+            stack.set_visible_child_name("settings");
+        });
+    }
+
+
+
     toast_overlay.set_child(Some(&split_view));
 
     let window = adw::ApplicationWindow::builder()
@@ -399,6 +448,13 @@ pub fn build_main_window(app: &adw::Application) -> adw::ApplicationWindow {
     // Fenêtre du Gestionnaire d'installation et Fenêtre d'informations détaillées
     let install_manager = InstallManagerUi::new(&window, Arc::clone(&cancel_handle));
     let details_dialog = PackageDetailsDialog::new(&window);
+    let aur_versions_dialog = AurVersionsDialog::new(&window);
+    let settings_view = SettingsView::new(&cmd_tx);
+    widen_preferences_page_clamp(settings_view.root().upcast_ref::<gtk4::Widget>());
+    content_stack.add_named(
+        settings_view.root().upcast_ref::<gtk4::Widget>(),
+        Some("settings"),
+    );
 
     // Alerte à la fermeture de l'application si une installation est en cours
     {
@@ -467,6 +523,8 @@ pub fn build_main_window(app: &adw::Application) -> adw::ApplicationWindow {
         let collapsed_wc_ref = collapsed_window_controls;
         let badges_ref = Rc::clone(&badge_widgets);
         let version_label_ref = version_label.clone();
+        let settings_label_ref = settings_label.clone();
+        let settings_content_ref = settings_content.clone();
 
         sidebar_toggle_btn.connect_clicked(move |btn| {
             let (is_collapsed, updates_count) = {
@@ -475,7 +533,9 @@ pub fn build_main_window(app: &adw::Application) -> adw::ApplicationWindow {
                 let upd = st
                     .catalog_packages
                     .iter()
-                    .filter(|p| p.update_available.is_some())
+                    .filter(|p| {
+                        p.update_available.is_some() && !st.ignored_updates.contains(&p.id)
+                    })
                     .count();
                 (st.sidebar_collapsed, upd)
             };
@@ -489,6 +549,8 @@ pub fn build_main_window(app: &adw::Application) -> adw::ApplicationWindow {
                 btn,
                 &badges_ref,
                 &version_label_ref,
+                &settings_label_ref,
+                &settings_content_ref,
                 is_collapsed,
                 updates_count,
             );
@@ -504,6 +566,8 @@ pub fn build_main_window(app: &adw::Application) -> adw::ApplicationWindow {
         loading_status_page: loading_status_page.clone(),
         empty_check_updates_btn: empty_check_updates_btn.clone(),
         details_dialog,
+        aur_versions_dialog,
+        settings_view,
     };
 
     // --- Connexion du sélecteur de tri AUR ---
@@ -592,6 +656,7 @@ pub fn build_main_window(app: &adw::Application) -> adw::ApplicationWindow {
         let tx = cmd_tx.clone();
         let badges = Rc::clone(&badge_widgets);
         let actions = header_actions.clone();
+        let header_title = app_header_title.clone();
 
         sidebar_list.connect_row_selected(move |_, opt_row| {
             let Some(row) = opt_row else {
@@ -612,6 +677,7 @@ pub fn build_main_window(app: &adw::Application) -> adw::ApplicationWindow {
                 st.aur_current_page = 0;
             }
             nav_content.set_title(category.title());
+            header_title.set_label(category.title());
 
             rebuild_package_list_ui(
                 &state_cat,
@@ -741,16 +807,21 @@ pub fn build_main_window(app: &adw::Application) -> adw::ApplicationWindow {
         let state_upd_all = Rc::clone(&state);
         let tx_upd_all = cmd_tx.clone();
         update_all_btn.connect_clicked(move |btn| {
-            let items: Vec<PackageItem> = {
+            let (items, ignored): (Vec<PackageItem>, Vec<String>) = {
                 let st = state_upd_all.borrow();
-                st.catalog_packages
-                    .iter()
-                    .filter(|p| p.update_available.is_some())
-                    .cloned()
-                    .collect()
+                (
+                    st.catalog_packages
+                        .iter()
+                        .filter(|p| {
+                            p.update_available.is_some() && !st.ignored_updates.contains(&p.id)
+                        })
+                        .cloned()
+                        .collect(),
+                    st.ignored_updates.iter().cloned().collect(),
+                )
             };
             btn.set_sensitive(false);
-            let _ = tx_upd_all.send(BackendCommand::UpdateAllSystem { items });
+            let _ = tx_upd_all.send(BackendCommand::UpdateAllSystem { items, ignored });
         });
     }
 
@@ -900,12 +971,33 @@ pub fn build_main_window(app: &adw::Application) -> adw::ApplicationWindow {
                     }
                     UiEvent::UpdatesChecked {
                         snapshot,
-                        summary_toast,
+                        summary_toast: _,
                     } => {
                         spinner_ui.set_spinning(false);
                         spinner_ui.set_visible(false);
                         actions_ui.refresh_btn.set_sensitive(true);
                         actions_ui.update_all_btn.set_sensitive(true);
+
+                        let visible_updates = {
+                            let st = state_ui.borrow();
+                            snapshot
+                                .packages
+                                .iter()
+                                .filter(|pkg| {
+                                    pkg.update_available.is_some()
+                                        && !st.ignored_updates.contains(&pkg.id)
+                                })
+                                .count()
+                        };
+                        let summary_toast = if visible_updates > 0 {
+                            format!(
+                                "Vérification terminée : {visible_updates} mise(s) à jour disponible(s)."
+                            )
+                        } else {
+                            String::from(
+                                "Vérification terminée : tous vos paquets (Pacman, AUR, Flatpak, AppImages) sont à jour.",
+                            )
+                        };
 
                         if !snapshot.non_fatal_warnings.is_empty() {
                             let joined = snapshot.non_fatal_warnings.join(" · ");
@@ -1036,6 +1128,89 @@ pub fn build_main_window(app: &adw::Application) -> adw::ApplicationWindow {
                     }
                     UiEvent::PackageDetailsLoaded(info) => {
                         actions_ui.details_dialog.show_details(&info);
+                    }
+                    UiEvent::CatalogReloadRequested => {
+                        let _ = tx_ui.send(BackendCommand::RefreshCatalog);
+                    }
+                    UiEvent::AurVersionsLoaded {
+                        package_base,
+                        versions,
+                        ..
+                    } => {
+                        spinner_ui.set_spinning(false);
+                        spinner_ui.set_visible(false);
+                        actions_ui
+                            .aur_versions_dialog
+                            .show_versions_for_current(&package_base, &versions, &tx_ui);
+                    }
+                    UiEvent::AurVersionsError(detail) => {
+                        spinner_ui.set_spinning(false);
+                        spinner_ui.set_visible(false);
+                        actions_ui.aur_versions_dialog.show_error(&detail);
+                    }
+                    UiEvent::MirrorListLoaded(mirrors) => {
+                        spinner_ui.set_spinning(false);
+                        spinner_ui.set_visible(false);
+                        actions_ui.settings_view.on_mirror_list_loaded(mirrors);
+                    }
+                    UiEvent::MirrorListApplied { message } => {
+                        actions_ui.settings_view.on_mirrorlist_applied(&message);
+                    }
+                    UiEvent::ReflectorError(detail) => {
+                        spinner_ui.set_spinning(false);
+                        spinner_ui.set_visible(false);
+                        actions_ui.settings_view.on_mirror_error(&detail);
+                    }
+                    UiEvent::PacmanCacheSize { bytes } => {
+                        actions_ui.settings_view.on_cache_size(bytes);
+                    }
+                    UiEvent::PacmanCacheError(detail) => {
+                        actions_ui.settings_view.on_cache_error(&detail);
+                    }
+                    UiEvent::ServicesNeedRestart {
+                        services,
+                        kernel_status,
+                    } => {
+                        spinner_ui.set_spinning(false);
+                        spinner_ui.set_visible(false);
+                        actions_ui.settings_view.set_services_checking(false);
+                        if services.is_empty() {
+                            if backend::needrestart::reboot_recommended(kernel_status) {
+                                let toast = adw::Toast::builder()
+                                    .title("Un redémarrage du système est conseillé : un nouveau noyau a été installé.")
+                                    .timeout(7)
+                                    .build();
+                                toast_ui.add_toast(toast);
+                            }
+                        } else {
+                            state_ui.borrow_mut().pending_kernel_status = kernel_status;
+                            show_services_restart_prompt(
+                                &win_for_shots,
+                                &services,
+                                kernel_status,
+                                &tx_ui,
+                            );
+                        }
+                    }
+                    UiEvent::ServicesRestarted {
+                        restarted,
+                        failures,
+                        kernel_status,
+                    } => {
+                        spinner_ui.set_spinning(false);
+                        spinner_ui.set_visible(false);
+                        actions_ui.settings_view.set_services_checking(false);
+                        let kernel_status = state_ui
+                            .borrow_mut()
+                            .pending_kernel_status
+                            .take()
+                            .or(kernel_status);
+                        show_services_restart_result(
+                            &win_for_shots,
+                            &restarted,
+                            &failures,
+                            kernel_status,
+                        );
                     }
                     UiEvent::OptionalDependenciesPrompt {
                         items,
@@ -1237,6 +1412,7 @@ pub fn build_main_window(app: &adw::Application) -> adw::ApplicationWindow {
                         spinner_ui.set_visible(false);
                         actions_ui.refresh_btn.set_sensitive(true);
                         actions_ui.update_all_btn.set_sensitive(true);
+                        actions_ui.settings_view.set_services_checking(false);
 
                         add_notification(
                             &state_ui,
@@ -1256,6 +1432,7 @@ pub fn build_main_window(app: &adw::Application) -> adw::ApplicationWindow {
                     }
                     UiEvent::OperationError { title, detail } => {
                         spinner_ui.set_spinning(false);
+                        actions_ui.settings_view.set_services_checking(false);
                         spinner_ui.set_visible(false);
                         actions_ui.refresh_btn.set_sensitive(true);
                         actions_ui.update_all_btn.set_sensitive(true);
@@ -1358,6 +1535,134 @@ pub fn build_main_window(app: &adw::Application) -> adw::ApplicationWindow {
     let _ = cmd_tx.send(BackendCommand::CheckPacmanLock);
 
     window
+}
+
+fn show_services_restart_prompt(
+    parent: &adw::ApplicationWindow,
+    services: &[String],
+    kernel_status: Option<u32>,
+    cmd_tx: &Sender<BackendCommand>,
+) {
+    let mut body = format!(
+        "{} service(s) utilisent encore d'anciennes bibliothèques et doivent être redémarrés :",
+        services.len()
+    );
+    if backend::needrestart::reboot_recommended(kernel_status) {
+        body.push_str(
+            "\n\nUn nouveau noyau est installé : un redémarrage complet restera nécessaire.",
+        );
+    }
+
+    let dialog = adw::MessageDialog::builder()
+        .transient_for(parent)
+        .modal(true)
+        .heading("Services à redémarrer")
+        .body(&body)
+        .build();
+
+    let list = services
+        .iter()
+        .map(|service| format!("• {service}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let list_label = gtk4::Label::builder()
+        .label(&list)
+        .xalign(0.0)
+        .selectable(true)
+        .wrap(true)
+        .build();
+    let scroll = gtk4::ScrolledWindow::builder()
+        .min_content_height(120)
+        .max_content_height(280)
+        .child(&list_label)
+        .build();
+    dialog.set_extra_child(Some(&scroll));
+
+    dialog.add_response("later", "Plus tard");
+    dialog.add_response("restart", "Redémarrer maintenant");
+    dialog.set_default_response(Some("restart"));
+    dialog.set_close_response("later");
+    dialog.set_response_appearance("restart", adw::ResponseAppearance::Suggested);
+
+    let services = services.to_vec();
+    let tx = cmd_tx.clone();
+    dialog.connect_response(None, move |dlg, response| {
+        dlg.close();
+        if response == "restart" {
+            let _ = tx.send(BackendCommand::RestartServices {
+                services: services.clone(),
+                kernel_status,
+            });
+        }
+    });
+    dialog.present();
+}
+
+fn show_services_restart_result(
+    parent: &adw::ApplicationWindow,
+    restarted: &[String],
+    failures: &[crate::backend::models::ServiceRestartFailure],
+    kernel_status: Option<u32>,
+) {
+    let needs_reboot =
+        backend::needrestart::reboot_recommended(kernel_status) || !failures.is_empty();
+
+    let (heading, mut body) = if failures.is_empty() {
+        (
+            "Services redémarrés",
+            format!(
+                "Les {} service(s) détecté(s) ont redémarré avec succès.",
+                restarted.len()
+            ),
+        )
+    } else {
+        (
+            "Certains services n'ont pas redémarré",
+            format!(
+                "{} service(s) redémarré(s), {} échec(s).",
+                restarted.len(),
+                failures.len()
+            ),
+        )
+    };
+
+    if needs_reboot {
+        body.push_str(
+            "\n\nUn redémarrage du système est conseillé pour finaliser la mise à jour.",
+        );
+    }
+
+    let dialog = adw::MessageDialog::builder()
+        .transient_for(parent)
+        .modal(true)
+        .heading(heading)
+        .body(&body)
+        .build();
+
+    if !failures.is_empty() {
+        let details = failures
+            .iter()
+            .map(|failure| format!("• {}\n{}", failure.name, failure.status))
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        let details_label = gtk4::Label::builder()
+            .label(&details)
+            .xalign(0.0)
+            .selectable(true)
+            .wrap(true)
+            .build();
+        let scroll = gtk4::ScrolledWindow::builder()
+            .min_content_height(160)
+            .max_content_height(340)
+            .child(&details_label)
+            .build();
+        dialog.set_extra_child(Some(&scroll));
+    }
+
+    dialog.add_response("ok", "OK");
+    dialog.set_default_response(Some("ok"));
+    dialog.set_close_response("ok");
+    dialog.present();
 }
 
 fn show_pacman_lock_repair_dialog(
@@ -1578,6 +1883,8 @@ fn apply_sidebar_collapsed_state(
     sidebar_toggle_btn: &gtk4::Button,
     badges: &CategoryBadgeWidgets,
     version_label: &gtk4::Label,
+    settings_label: &gtk4::Label,
+    settings_content: &gtk4::Box,
     is_collapsed: bool,
     updates_count: usize,
 ) {
@@ -1609,6 +1916,9 @@ fn apply_sidebar_collapsed_state(
         version_label.set_halign(gtk4::Align::Center);
         version_label.set_margin_start(0);
         version_label.set_margin_end(0);
+
+        settings_label.set_visible(false);
+        settings_content.set_halign(gtk4::Align::Center);
 
         split_view.set_min_sidebar_width(SIDEBAR_COLLAPSED_WIDTH);
         split_view.set_max_sidebar_width(SIDEBAR_COLLAPSED_WIDTH);
@@ -1646,6 +1956,9 @@ fn apply_sidebar_collapsed_state(
         version_label.set_halign(gtk4::Align::Start);
         version_label.set_margin_start(10);
         version_label.set_margin_end(8);
+
+        settings_label.set_visible(true);
+        settings_content.set_halign(gtk4::Align::Start);
     }
 }
 
@@ -1735,6 +2048,10 @@ fn make_row_with_selection(
     let item_for_info = item.clone();
     let tx_for_info = cmd_tx.clone();
 
+    let dialog_for_version = actions.aur_versions_dialog.clone();
+    let item_for_version = item.clone();
+    let tx_for_version = cmd_tx.clone();
+
     build_package_action_row(
         item,
         is_checked,
@@ -1759,7 +2076,74 @@ fn make_row_with_selection(
                 item: item_for_info.clone(),
             });
         },
+        move || {
+            dialog_for_version.show_loading(&item_for_version);
+            let _ = tx_for_version.send(BackendCommand::FetchAurVersions {
+                package: item_for_version.name.clone(),
+            });
+        },
     )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn attach_update_ignore_button(
+    row: &adw::ActionRow,
+    package_id: &str,
+    ignored: bool,
+    state_rc: &Rc<RefCell<AppUiState>>,
+    prefs_page: &adw::PreferencesPage,
+    stack: &gtk4::Stack,
+    empty_status_page: &adw::StatusPage,
+    badges: &Rc<CategoryBadgeWidgets>,
+    actions: &HeaderActionButtons,
+    cmd_tx: &Sender<BackendCommand>,
+) {
+    let button = gtk4::Button::builder()
+        .icon_name(if ignored {
+            "view-reveal-symbolic"
+        } else {
+            "view-conceal-symbolic"
+        })
+        .tooltip_text(if ignored {
+            "Réactiver cette mise à jour"
+        } else {
+            "Ignorer cette mise à jour"
+        })
+        .valign(gtk4::Align::Center)
+        .css_classes(["flat", "circular"])
+        .build();
+
+    let package_id = package_id.to_string();
+    let state_clone = Rc::clone(state_rc);
+    let prefs_clone = prefs_page.clone();
+    let stack_clone = stack.clone();
+    let empty_clone = empty_status_page.clone();
+    let badges_clone = Rc::clone(badges);
+    let actions_clone = actions.clone();
+    let tx_clone = cmd_tx.clone();
+
+    button.connect_clicked(move |_| {
+        backend::settings::set_update_ignored(&package_id, !ignored);
+        {
+            let mut st = state_clone.borrow_mut();
+            if ignored {
+                st.ignored_updates.remove(&package_id);
+            } else {
+                st.ignored_updates.insert(package_id.clone());
+            }
+        }
+        rebuild_package_list_ui(
+            &state_clone,
+            &prefs_clone,
+            &stack_clone,
+            &empty_clone,
+            &badges_clone,
+            &actions_clone,
+            &tx_clone,
+        );
+    });
+
+    row.add_suffix(&button);
 }
 
 fn rebuild_package_list_ui(
@@ -1773,6 +2157,7 @@ fn rebuild_package_list_ui(
 ) {
     let (
         filtered_items,
+        ignored_items,
         recommendations,
         flatpak_recommendations,
         category,
@@ -1830,6 +2215,8 @@ fn rebuild_package_list_ui(
             })
             .sum();
 
+        let ignored = st.ignored_updates.clone();
+
         let mut c_all = 0usize;
         let mut c_installed = 0usize;
         let mut c_updates = 0usize;
@@ -1849,7 +2236,7 @@ fn rebuild_package_list_ui(
             if pkg.is_installed {
                 c_installed += 1;
             }
-            if pkg.update_available.is_some() {
+            if pkg.update_available.is_some() && !ignored.contains(&pkg.id) {
                 c_updates += 1;
             }
             match pkg.source {
@@ -1877,6 +2264,9 @@ fn rebuild_package_list_ui(
                 if !cat.matches(pkg) {
                     return false;
                 }
+                if matches!(cat, SidebarCategory::Updates) && ignored.contains(&pkg.id) {
+                    return false;
+                }
                 if is_local_filter {
                     return pkg.matches_search_query(&q_low);
                 }
@@ -1884,6 +2274,21 @@ fn rebuild_package_list_ui(
             })
             .cloned()
             .collect();
+
+        let mut ignored_items: Vec<PackageItem> = if matches!(cat, SidebarCategory::Updates) {
+            base_slice
+                .iter()
+                .filter(|pkg| {
+                    cat.matches(pkg)
+                        && ignored.contains(&pkg.id)
+                        && (!is_local_filter || pkg.matches_search_query(&q_low))
+                })
+                .cloned()
+                .collect()
+        } else {
+            Vec::new()
+        };
+        ignored_items.sort_by_key(|item| item.name.to_lowercase());
 
         if matches!(cat, SidebarCategory::Aur) {
             let sort_mode = st.aur_sort_mode;
@@ -1960,6 +2365,7 @@ fn rebuild_package_list_ui(
 
         (
             items,
+            ignored_items,
             filtered_recs,
             filtered_fp_recs,
             cat,
@@ -2203,7 +2609,7 @@ fn rebuild_package_list_ui(
         return;
     }
 
-    if filtered_items.is_empty() {
+    if filtered_items.is_empty() && ignored_items.is_empty() {
         configure_empty_status_page(empty_status_page, category, &active_query, actions);
         stack.set_visible_child_name("empty");
         return;
@@ -2268,11 +2674,56 @@ fn rebuild_package_list_ui(
 
             for item in sec_items {
                 let row = make_row_with_selection(item, state_rc, actions, cmd_tx);
+                attach_update_ignore_button(
+                    &row,
+                    &item.id,
+                    false,
+                    state_rc,
+                    prefs_page,
+                    stack,
+                    empty_status_page,
+                    badges,
+                    actions,
+                    cmd_tx,
+                );
                 sec_group.add(&row);
             }
 
             prefs_page.add(&sec_group);
             created_groups.push(sec_group);
+        }
+
+        if !ignored_items.is_empty() {
+            let escaped_title = glib::markup_escape_text(&format!(
+                "Mises à jour ignorées ({})",
+                ignored_items.len()
+            ));
+            let ignored_group = adw::PreferencesGroup::builder()
+                .title(escaped_title.as_str())
+                .description(
+                    "Ces mises à jour sont exclues de la mise à jour globale.                      Utilisez le bouton de réactivation pour les réintégrer.",
+                )
+                .build();
+
+            for item in &ignored_items {
+                let row = make_row_with_selection(item, state_rc, actions, cmd_tx);
+                attach_update_ignore_button(
+                    &row,
+                    &item.id,
+                    true,
+                    state_rc,
+                    prefs_page,
+                    stack,
+                    empty_status_page,
+                    badges,
+                    actions,
+                    cmd_tx,
+                );
+                ignored_group.add(&row);
+            }
+
+            prefs_page.add(&ignored_group);
+            created_groups.push(ignored_group);
         }
 
         state_rc.borrow_mut().active_groups = created_groups;
@@ -3357,8 +3808,14 @@ async fn handle_backend_command(
                 }
             }
         }
-        BackendCommand::UpdateAllSystem { items } => {
-            backend::update_all_system_and_aur_with_progress(&items, cancel_handle, ui_tx).await;
+        BackendCommand::UpdateAllSystem { items, ignored } => {
+            backend::update_all_system_and_aur_with_progress(
+                &items,
+                &ignored,
+                cancel_handle,
+                ui_tx,
+            )
+            .await;
         }
         BackendCommand::CheckPacmanLock => {
             if let Some(lock_info) = backend::pacman::inspect_pacman_lock().await {
@@ -3384,6 +3841,223 @@ async fn handle_backend_command(
                     let _ = ui_tx
                         .send(UiEvent::OperationError {
                             title: String::from("Échec de la réparation du verrouillage Pacman"),
+                            detail: err.to_string(),
+                        })
+                        .await;
+                }
+            }
+        }
+        BackendCommand::FetchAurVersions { package } => {
+            let _ = ui_tx
+                .send(UiEvent::LoadingStarted {
+                    message: format!("Lecture de l'historique AUR de « {package} »…"),
+                })
+                .await;
+
+            match backend::aur_versions::list_versions(&package).await {
+                Ok((package_base, versions)) => {
+                    let _ = ui_tx
+                        .send(UiEvent::AurVersionsLoaded {
+                            package,
+                            package_base,
+                            versions,
+                        })
+                        .await;
+                }
+                Err(err) => {
+                    let _ = ui_tx
+                        .send(UiEvent::AurVersionsError(err.to_string()))
+                        .await;
+                }
+            }
+        }
+        BackendCommand::InstallAurVersion {
+            package,
+            package_base,
+            version,
+            commit,
+        } => {
+            let target = format!("{package} {version}");
+            let _ = ui_tx
+                .send(UiEvent::InstallStarted {
+                    target_names: vec![target.clone()],
+                })
+                .await;
+
+            let elevation = Elevation::detect();
+            match backend::aur_versions::install_version(
+                &package,
+                &package_base,
+                &version,
+                &commit,
+                &elevation,
+                cancel_handle,
+                ui_tx,
+            )
+            .await
+            {
+                Ok(message) => {
+                    let _ = ui_tx
+                        .send(UiEvent::InstallFinished {
+                            success: true,
+                            message,
+                            installed_ids: vec![format!("aur:{package}")],
+                        })
+                        .await;
+                    let _ = ui_tx.send(UiEvent::CatalogReloadRequested).await;
+                }
+                Err(err) => {
+                    let _ = ui_tx
+                        .send(UiEvent::InstallFinished {
+                            success: false,
+                            message: format!("Échec de l'installation de {target} : {err}"),
+                            installed_ids: Vec::new(),
+                        })
+                        .await;
+                }
+            }
+        }
+        BackendCommand::ListReflectorMirrors => {
+            let _ = ui_tx
+                .send(UiEvent::LoadingStarted {
+                    message: String::from("Analyse des miroirs et mesure des débits…"),
+                })
+                .await;
+
+            match backend::reflector::list_mirrors().await {
+                Ok(mirrors) => {
+                    let _ = ui_tx.send(UiEvent::MirrorListLoaded(mirrors)).await;
+                }
+                Err(err) => {
+                    let _ = ui_tx
+                        .send(UiEvent::ReflectorError(err.to_string()))
+                        .await;
+                }
+            }
+        }
+        BackendCommand::ApplyMirrorlist { servers } => {
+            let elevation = Elevation::detect();
+            match backend::reflector::apply_mirrorlist(&elevation, &servers).await {
+                Ok(message) => {
+                    let _ = ui_tx
+                        .send(UiEvent::MirrorListApplied {
+                            message: message.clone(),
+                        })
+                        .await;
+                    let _ = ui_tx
+                        .send(UiEvent::OperationSuccess {
+                            message,
+                            reload_catalog: false,
+                        })
+                        .await;
+                }
+                Err(err) => {
+                    let _ = ui_tx
+                        .send(UiEvent::OperationError {
+                            title: String::from("Application des miroirs"),
+                            detail: err.to_string(),
+                        })
+                        .await;
+                }
+            }
+        }
+        BackendCommand::GetPacmanCacheSize => {
+            match backend::pacman::pacman_cache_size_bytes().await {
+                Ok(bytes) => {
+                    let _ = ui_tx.send(UiEvent::PacmanCacheSize { bytes }).await;
+                }
+                Err(err) => {
+                    let _ = ui_tx
+                        .send(UiEvent::PacmanCacheError(err.to_string()))
+                        .await;
+                }
+            }
+        }
+        BackendCommand::CleanPacmanCache => {
+            let elevation = Elevation::detect();
+            match backend::pacman::clean_pacman_cache(&elevation).await {
+                Ok(message) => {
+                    let _ = ui_tx
+                        .send(UiEvent::OperationSuccess {
+                            message,
+                            reload_catalog: false,
+                        })
+                        .await;
+                    if let Ok(bytes) = backend::pacman::pacman_cache_size_bytes().await {
+                        let _ = ui_tx.send(UiEvent::PacmanCacheSize { bytes }).await;
+                    }
+                }
+                Err(err) => {
+                    let _ = ui_tx
+                        .send(UiEvent::PacmanCacheError(err.to_string()))
+                        .await;
+                }
+            }
+        }
+        BackendCommand::CheckServices => {
+            let _ = ui_tx
+                .send(UiEvent::LoadingStarted {
+                    message: String::from("Vérification des services à redémarrer…"),
+                })
+                .await;
+
+            let elevation = Elevation::detect();
+            match backend::needrestart::detect(&elevation).await {
+                Ok(report) => {
+                    if report.services.is_empty()
+                        && !backend::needrestart::reboot_recommended(report.kernel_status)
+                    {
+                        let _ = ui_tx
+                            .send(UiEvent::OperationSuccess {
+                                message: String::from(
+                                    "Aucun service ne nécessite de redémarrage.",
+                                ),
+                                reload_catalog: false,
+                            })
+                            .await;
+                    } else {
+                        let _ = ui_tx
+                            .send(UiEvent::ServicesNeedRestart {
+                                services: report.services,
+                                kernel_status: report.kernel_status,
+                            })
+                            .await;
+                    }
+                }
+                Err(err) => {
+                    let _ = ui_tx
+                        .send(UiEvent::OperationError {
+                            title: String::from("Vérification des services"),
+                            detail: err.to_string(),
+                        })
+                        .await;
+                }
+            }
+        }
+        BackendCommand::RestartServices {
+            services,
+            kernel_status,
+        } => {
+            let _ = ui_tx
+                .send(UiEvent::LoadingStarted {
+                    message: String::from("Redémarrage des services…"),
+                })
+                .await;
+
+            match backend::needrestart::restart_services(&services).await {
+                Ok(report) => {
+                    let _ = ui_tx
+                        .send(UiEvent::ServicesRestarted {
+                            restarted: report.restarted,
+                            failures: report.failures,
+                            kernel_status,
+                        })
+                        .await;
+                }
+                Err(err) => {
+                    let _ = ui_tx
+                        .send(UiEvent::OperationError {
+                            title: String::from("Redémarrage des services"),
                             detail: err.to_string(),
                         })
                         .await;

@@ -1631,3 +1631,73 @@ pub async fn update_pacman_all_streaming(
         Err(AppError::PacmanError(detail))
     }
 }
+
+/// Taille totale du cache de paquets Pacman (`/var/cache/pacman/pkg`), en octets.
+pub async fn pacman_cache_size_bytes() -> AppResult<u64> {
+    let path = "/var/cache/pacman/pkg";
+    if !std::path::Path::new(path).exists() {
+        return Ok(0);
+    }
+
+    let output = Command::new("du")
+        .args(["-sb", path])
+        .env("LC_ALL", "C")
+        .stdin(Stdio::null())
+        .output()
+        .await
+        .map_err(|err| AppError::PacmanError(format!("du : {err}")))?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let bytes = stdout
+        .split_whitespace()
+        .next()
+        .and_then(|value| value.parse::<u64>().ok());
+
+    if let Some(bytes) = bytes {
+        // `du` peut retourner un code non nul à cause de sous-répertoires root
+        // inaccessibles, tout en fournissant un total exploitable sur stdout.
+        return Ok(bytes);
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    Err(AppError::PacmanError(format!(
+        "impossible de mesurer le cache Pacman : {stderr}"
+    )))
+}
+
+/// Nettoie le cache Pacman avec `paccache -r` (conserve les 3 dernières versions).
+pub async fn clean_pacman_cache(elevation: &Elevation) -> AppResult<String> {
+    let output = tokio::time::timeout(
+        std::time::Duration::from_secs(300),
+        elevation
+            .build_command("paccache")
+            .arg("-r")
+            .stdin(Stdio::null())
+            .output(),
+    )
+    .await
+    .map_err(|_| AppError::PacmanError(String::from("délai de nettoyage du cache dépassé")))?
+    .map_err(|err| AppError::PacmanError(format!("paccache : {err}")))?;
+
+    if output.status.success() {
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if stdout.is_empty() {
+            Ok(String::from(
+                "Cache Pacman nettoyé avec paccache (3 dernières versions conservées).",
+            ))
+        } else {
+            Ok(stdout)
+        }
+    } else if elevation.authentication_was_cancelled() {
+        Err(AppError::PacmanError(String::from(
+            "Authentification administrateur annulée.",
+        )))
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let detail = if !stderr.is_empty() { stderr } else { stdout };
+        Err(AppError::PacmanError(format!(
+            "échec du nettoyage du cache Pacman : {detail}"
+        )))
+    }
+}

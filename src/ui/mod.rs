@@ -1,8 +1,10 @@
 pub mod askpass;
+pub mod aur_versions_dialog;
 pub mod details_dialog;
 pub mod icons;
 pub mod install_dialog;
 pub mod messages;
 pub mod row;
+pub mod settings_page;
 pub mod style;
 pub mod window;

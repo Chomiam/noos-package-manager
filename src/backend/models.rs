@@ -136,6 +136,31 @@ pub struct PackageItem {
     pub aur_meta: Option<AurPackageMeta>,
 }
 
+/// Une version historique d'un paquet AUR, extraite de l'historique git du dépôt.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AurVersionInfo {
+    pub version: String,
+    pub commit: String,
+    pub timestamp: Option<i64>,
+}
+
+/// Un miroir Pacman tel que retourné par Reflector, avec son débit mesuré.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ReflectorMirror {
+    pub url: String,
+    pub country: String,
+    pub protocol: String,
+    pub rate_kib_s: f64,
+    pub delay_hours: f64,
+}
+
+/// Un service qui n'a pas pu être redémarré après une mise à jour.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ServiceRestartFailure {
+    pub name: String,
+    pub status: String,
+}
+
 impl PackageItem {
     pub fn has_update(&self) -> bool {
         self.update_available.is_some()
