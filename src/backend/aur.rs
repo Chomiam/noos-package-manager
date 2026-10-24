@@ -346,21 +346,43 @@ pub fn detect_aur_helper() -> Option<AurHelper> {
 
 /// Client HTTP AUR partagé par l'ensemble de l'application.
 ///
-/// Initialisé une seule fois au démarrage via [`init_shared_aur_client`] et réutilisé
-/// par tous les appels à l'API AUR RPC v5 afin d'éviter de recréer un `reqwest::Client`
-/// (et son pool de connexions TCP/TLS) à chaque requête.
+/// Initialisé paresseusement à la première utilisation et réutilisé par tous les appels à
+/// l'API AUR RPC v5 afin d'éviter de recréer un `reqwest::Client` (et son pool de connexions
+/// TCP/TLS) à chaque requête.
 static SHARED_AUR_CLIENT: OnceLock<AurClient> = OnceLock::new();
 
-/// Retourne une référence au client AUR partagé s'il a été initialisé.
+/// Retourne une référence au client AUR partagé, en l'initialisant si nécessaire.
+///
+/// L'initialisation paresseuse est indispensable pour les démarrages à chaud depuis le cache :
+/// le catalogue n'est alors pas rechargé intégralement et `init_shared_aur_client` n'est jamais
+/// appelé. Sans cela, `shared_aur_client()` restait `None` et la recherche AUR échouait
+/// silencieusement, laissant l'onglet AUR sur les seuls paquets du cache local.
 pub fn shared_aur_client() -> Option<&'static AurClient> {
-    SHARED_AUR_CLIENT.get()
+    if let Some(client) = SHARED_AUR_CLIENT.get() {
+        return Some(client);
+    }
+
+    match AurClient::new() {
+        Ok(client) => Some(SHARED_AUR_CLIENT.get_or_init(|| client)),
+        Err(e) => {
+            crate::backend::logging::log_warn(
+                "aur",
+                format!("Impossible d'initialiser le client AUR partagé : {e}"),
+            );
+            None
+        }
+    }
 }
 
-/// Initialise le client AUR partagé. Doit être appelé une fois au démarrage de l'application
-/// (par exemple depuis [`crate::backend::load_system_catalog_with_options`]).
+/// Initialise explicitement le client AUR partagé et retourne une référence statique.
 ///
-/// Retourne une référence statique valide pour toute la durée du processus.
+/// Conservé pour les appelants qui veulent remonter l'erreur d'initialisation ; les autres
+/// peuvent simplement utiliser [`shared_aur_client`] qui initialise le client à la demande.
 pub fn init_shared_aur_client() -> AppResult<&'static AurClient> {
+    if let Some(client) = SHARED_AUR_CLIENT.get() {
+        return Ok(client);
+    }
+
     let client = AurClient::new()?;
     Ok(SHARED_AUR_CLIENT.get_or_init(|| client))
 }

@@ -616,9 +616,10 @@ pub fn build_main_window(app: &adw::Application) -> adw::ApplicationWindow {
                 let mut st = state_search.borrow_mut();
                 st.active_query = text.clone();
                 st.aur_current_page = 0;
-                if text.is_empty() {
-                    st.search_results = None;
-                }
+                // Invalide les résultats de la requête précédente : tant que la nouvelle
+                // recherche distante n'a pas répondu, on filtre le catalogue local avec le
+                // texte courant plutôt que d'afficher des résultats devenus obsolètes.
+                st.search_results = None;
                 st.debounce_source.take()
             };
 

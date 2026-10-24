@@ -644,3 +644,22 @@ Proton VPN\tSecures your internet\tcom.protonvpn.www\t4.18.7\tstable\tflathub
 
     Ok(())
 }
+
+#[test]
+fn test_shared_aur_client_initializes_lazily() -> TestResult {
+    // Régression : au démarrage à chaud depuis le cache, le catalogue n'est pas rechargé
+    // intégralement et `init_shared_aur_client` n'est jamais appelé. La recherche AUR doit
+    // malgré tout disposer d'un client HTTP, sinon elle échoue et l'onglet AUR se contente
+    // des paquets déjà indexés dans le cache local.
+    let client = crate::backend::aur::shared_aur_client()
+        .ok_or("le client AUR partagé doit s'initialiser à la première utilisation")?;
+    let again = crate::backend::aur::shared_aur_client()
+        .ok_or("le client AUR partagé doit rester disponible")?;
+
+    assert!(
+        std::ptr::eq(client, again),
+        "les appels suivants doivent réutiliser la même instance partagée"
+    );
+
+    Ok(())
+}
