@@ -27,7 +27,7 @@ makedepends=(
   'git'
 )
 source=("$pkgname-$pkgver.tar.gz::https://github.com/Chomiam/noos-package-manager/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('82558b8c75f09f6d01eb63d1f6c87b6dc2095c61848abab0ce985330fccb0edc')
+sha256sums=('20e131aaa906087f80a69448b7126fcb2730a6e9c2f547f6c465befa18b0a849')
 
 prepare() {
   cd "$pkgname-$pkgver"
