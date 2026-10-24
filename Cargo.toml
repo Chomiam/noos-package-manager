@@ -35,3 +35,6 @@ tempfile = "3.19.1"
 ratatui = "0.29.0"
 crossterm = "0.28.1"
 portable-pty = "0.9.0"
+
+[patch.crates-io]
+libadwaita-sys = { path = "vendor/libadwaita-sys" }

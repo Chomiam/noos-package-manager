@@ -1,5 +1,5 @@
 pkgbase = noos-package-manager
-	pkgdesc = Gestionnaire de paquets GTK4/Libadwaita et outil CLI (noos-up) pour Arch Linux (Pacman, AUR via Yay, Flatpak et AppImages)
+	pkgdesc = Gestionnaire de paquets GTK4/libAdapta et outil CLI (noos-up) pour Arch Linux (Pacman, AUR via Yay, Flatpak et AppImages)
 	pkgver = 0.1.11
 	pkgrel = 1
 	url = https://github.com/Chomiam/noos-package-manager
@@ -9,7 +9,7 @@ pkgbase = noos-package-manager
 	makedepends = cargo
 	makedepends = git
 	depends = gtk4
-	depends = libadwaita
+	depends = libadapta
 	depends = glibc
 	depends = gcc-libs
 	depends = pacman

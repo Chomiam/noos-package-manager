@@ -1,6 +1,6 @@
 # Noos Package Manager
 
-**Noos Package Manager** est un gestionnaire de paquets graphique moderne et unifié pour **Arch Linux**, écrit intégralement en **Rust** avec **GTK4** et **Libadwaita**.
+**Noos Package Manager** est un gestionnaire de paquets graphique moderne et unifié pour **Arch Linux**, écrit intégralement en **Rust** avec **GTK4** et **libAdapta**.
 
 Il réunit au sein d'une seule interface fluide (compatible avec les thèmes GNOME et WhiteSur) les **dépôts officiels Pacman**, l'**Arch User Repository (AUR RPC v5 + `yay`)**, les applications **Flatpak / Flathub** ainsi que la gestion locale complète des **AppImages**, et inclut l'outil en ligne de commande **`noos-up`** propulsé par **Ratatui**.
 
@@ -113,7 +113,7 @@ noos-up --help
 
 #### Prérequis système (Arch Linux)
 ```bash
-sudo pacman -S --needed rust cargo gtk4 libadwaita pacman-contrib flatpak polkit sudo reflector git
+yay -S --needed rust cargo gtk4 libadapta pacman-contrib flatpak polkit sudo reflector git
 ```
 
 `needrestart` (détection des services à redémarrer) est disponible dans l'AUR / chaotic-aur ; il est déclaré comme dépendance du paquet AUR.
@@ -143,7 +143,7 @@ cargo clippy --all-targets -- -D warnings
 
 ```
 src/
-├── main.rs                 # Point d'entrée GTK4/Libadwaita
+├── main.rs                 # Point d'entrée GTK4/libAdapta
 ├── error.rs                # Gestion d'erreurs typée (AppError / AppResult)
 ├── backend/
 │   ├── mod.rs              # Déclaration des sous-modules et réexports
@@ -166,7 +166,7 @@ src/
 │   └── tests.rs            # Tests unitaires
 └── ui/
     ├── mod.rs
-    ├── window.rs           # Fenêtre principale (GTK4 / Libadwaita)
+    ├── window.rs           # Fenêtre principale (GTK4 / libAdapta)
     ├── askpass.rs          # Assistant graphique de mot de passe (sudo -A)
     ├── settings_page.rs    # Page Paramètres (Reflector, cache Pacman)
     ├── aur_versions_dialog.rs # Fenêtre de choix des versions antérieures AUR

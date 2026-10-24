@@ -2,13 +2,13 @@
 pkgname=noos-package-manager
 pkgver=0.1.11
 pkgrel=1
-pkgdesc="Gestionnaire de paquets GTK4/Libadwaita et outil CLI (noos-up) pour Arch Linux (Pacman, AUR via Yay, Flatpak et AppImages)"
+pkgdesc="Gestionnaire de paquets GTK4/libAdapta et outil CLI (noos-up) pour Arch Linux (Pacman, AUR via Yay, Flatpak et AppImages)"
 arch=('x86_64' 'aarch64')
 url="https://github.com/Chomiam/noos-package-manager"
 license=('GPL-3.0-or-later')
 depends=(
   'gtk4'
-  'libadwaita'
+  'libadapta'
   'glibc'
   'gcc-libs'
   'pacman'
