@@ -23,7 +23,6 @@ pub struct SettingsView {
     apply_selection_button: gtk4::Button,
     mirrors: Rc<RefCell<Vec<ReflectorMirror>>>,
     selected_mirrors: Rc<RefCell<HashSet<String>>>,
-    cache_switch: adw::SwitchRow,
     cache_size_row: adw::ActionRow,
     cache_spinner: gtk4::Spinner,
     clean_button: gtk4::Button,
@@ -104,15 +103,9 @@ impl SettingsView {
             )
             .build();
 
-        let cache_switch = adw::SwitchRow::builder()
-            .title("Afficher la taille du cache Pacman")
-            .subtitle("Calcule l'espace utilisé et affiche les actions de nettoyage")
-            .build();
-
         let cache_size_row = adw::ActionRow::builder()
             .title("Taille du cache")
-            .subtitle("—")
-            .visible(false)
+            .subtitle("Calcul en cours…")
             .build();
         let cache_spinner = gtk4::Spinner::builder()
             .spinning(false)
@@ -134,7 +127,6 @@ impl SettingsView {
             .build();
         clean_row.add_suffix(&clean_button);
 
-        cache_group.add(&cache_switch);
         cache_group.add(&cache_size_row);
         cache_group.add(&clean_row);
         root.add(&cache_group);
@@ -171,7 +163,6 @@ impl SettingsView {
             apply_selection_button,
             mirrors: Rc::new(RefCell::new(Vec::new())),
             selected_mirrors: Rc::new(RefCell::new(HashSet::new())),
-            cache_switch,
             cache_size_row,
             cache_spinner,
             clean_button,
@@ -180,6 +171,7 @@ impl SettingsView {
         };
 
         view.connect_handlers();
+        view.refresh_cache_size();
         view
     }
 
@@ -220,20 +212,6 @@ impl SettingsView {
                 }
                 view.set_mirror_status("Application de la sélection…");
                 let _ = cmd_tx.send(BackendCommand::ApplyMirrorlist { servers });
-            });
-        }
-
-        {
-            let cmd_tx = self.cmd_tx.clone();
-            let view = self.clone();
-            self.cache_switch.connect_active_notify(move |row| {
-                if row.is_active() {
-                    view.cache_size_row.set_visible(true);
-                    view.set_cache_loading();
-                    let _ = cmd_tx.send(BackendCommand::GetPacmanCacheSize);
-                } else {
-                    view.cache_size_row.set_visible(false);
-                }
             });
         }
 
@@ -358,6 +336,11 @@ impl SettingsView {
 
     pub fn set_services_checking(&self, checking: bool) {
         self.check_services_button.set_sensitive(!checking);
+    }
+
+    pub fn refresh_cache_size(&self) {
+        self.set_cache_loading();
+        let _ = self.cmd_tx.send(BackendCommand::GetPacmanCacheSize);
     }
 
     pub fn set_cache_loading(&self) {

@@ -417,19 +417,6 @@ pub fn build_main_window(app: &adw::Application) -> adw::ApplicationWindow {
     split_view.set_sidebar(Some(&sidebar_page));
     split_view.set_content(Some(&content_page));
 
-    {
-        let stack = content_stack.clone();
-        let nav = content_page.clone();
-        let list = sidebar_list.clone();
-        let header_title = app_header_title.clone();
-        settings_button.connect_clicked(move |_| {
-            list.unselect_all();
-            nav.set_title("Paramètres");
-            header_title.set_label("Paramètres");
-            stack.set_visible_child_name("settings");
-        });
-    }
-
 
 
     toast_overlay.set_child(Some(&split_view));
@@ -455,6 +442,22 @@ pub fn build_main_window(app: &adw::Application) -> adw::ApplicationWindow {
         settings_view.root().upcast_ref::<gtk4::Widget>(),
         Some("settings"),
     );
+
+    {
+        let stack = content_stack.clone();
+        let nav = content_page.clone();
+        let list = sidebar_list.clone();
+        let header_title = app_header_title.clone();
+        let settings_view_ref = settings_view.clone();
+        settings_button.connect_clicked(move |_| {
+            list.unselect_all();
+            nav.set_title("Paramètres");
+            header_title.set_label("Paramètres");
+            stack.set_visible_child_name("settings");
+            settings_view_ref.refresh_cache_size();
+        });
+    }
+
 
     // Alerte à la fermeture de l'application si une installation est en cours
     {
