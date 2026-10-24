@@ -74,14 +74,28 @@ impl Elevation {
     /// Construit une commande utilisateur (par exemple `yay`) qui doit pouvoir
     /// déclencher l'élévation pour ses appels internes à Pacman.
     pub fn user_command(&self, program: &str, args: &[&str]) -> Command {
+        self.user_command_with_env(program, args, &[])
+    }
+
+    /// Comme `user_command`, avec des variables d'environnement supplémentaires
+    /// (y compris lorsque la commande est encapsulée dans `systemd-run`).
+    pub fn user_command_with_env(
+        &self,
+        program: &str,
+        args: &[&str],
+        envs: &[(String, String)],
+    ) -> Command {
         match self {
             Self::Root => {
                 let mut cmd = Command::new(program);
                 cmd.args(args);
+                for (key, value) in envs {
+                    cmd.env(key, value);
+                }
                 cmd
             }
-            Self::Sudo(session) => session.build_user_command(program, args),
-            Self::Pkexec => build_pkexec_user_command(program, args),
+            Self::Sudo(session) => session.build_user_command_with_env(program, args, envs),
+            Self::Pkexec => build_pkexec_user_command_with_env(program, args, envs),
         }
     }
 
@@ -97,6 +111,12 @@ impl Elevation {
             ],
             _ => Vec::new(),
         }
+    }
+
+    /// Indique si les commandes utilisateur seront encapsulées dans `systemd-run`
+    /// (incompatible avec un PTY interactif Yay).
+    pub fn wraps_with_systemd_run(&self) -> bool {
+        matches!(self, Self::Sudo(_)) && should_wrap_with_systemd_run()
     }
 
     pub fn label(&self) -> &'static str {
@@ -189,9 +209,16 @@ impl SudoSession {
         }
     }
 
-    fn build_user_command(&self, program: &str, args: &[&str]) -> Command {
+    fn build_user_command_with_env(
+        &self,
+        program: &str,
+        args: &[&str],
+        envs: &[(String, String)],
+    ) -> Command {
         if should_wrap_with_systemd_run() {
-            let mut cmd = systemd_run_base(&[(String::from("PACMAN_AUTH"), String::new())]);
+            let mut extra = vec![(String::from("PACMAN_AUTH"), String::new())];
+            extra.extend(envs.iter().cloned());
+            let mut cmd = systemd_run_base(&extra);
             cmd.arg(program).args(args);
             cmd
         } else {
@@ -203,6 +230,9 @@ impl SudoSession {
                 .env_remove("SUDO_ASKPASS_REQUIRE")
                 .env_remove(ASKPASS_MODE_ENV)
                 .env_remove(ASKPASS_SESSION_ENV);
+            for (key, value) in envs {
+                cmd.env(key, value);
+            }
             cmd
         }
     }
@@ -232,9 +262,15 @@ impl SudoSession {
     }
 }
 
-fn build_pkexec_user_command(program: &str, args: &[&str]) -> Command {
+fn build_pkexec_user_command_with_env(
+    program: &str,
+    args: &[&str],
+    envs: &[(String, String)],
+) -> Command {
     if should_wrap_with_systemd_run() {
-        let mut cmd = systemd_run_base(&[(String::from("PACMAN_AUTH"), String::from("pkexec"))]);
+        let mut extra = vec![(String::from("PACMAN_AUTH"), String::from("pkexec"))];
+        extra.extend(envs.iter().cloned());
+        let mut cmd = systemd_run_base(&extra);
         cmd.arg(program).args(args);
         cmd
     } else {
@@ -242,6 +278,9 @@ fn build_pkexec_user_command(program: &str, args: &[&str]) -> Command {
         cmd.args(args)
             .env("LC_ALL", "C")
             .env("PACMAN_AUTH", "pkexec");
+        for (key, value) in envs {
+            cmd.env(key, value);
+        }
         cmd
     }
 }

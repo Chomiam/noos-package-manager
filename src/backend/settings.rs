@@ -12,6 +12,40 @@ pub struct AppSettings {
     /// (par exemple `aur:paquet` ou `flatpak:org.example.App`).
     #[serde(default)]
     pub ignored_updates: BTreeSet<String>,
+    /// Préférences de compilation AUR/Yay.
+    #[serde(default)]
+    pub yay: YaySettings,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct YaySettings {
+    /// Compilation multi-cœur via `MAKEFLAGS`.
+    #[serde(default = "default_true")]
+    pub multicore: bool,
+    /// Désactive la compression des paquets (`PKGEXT=.pkg.tar`).
+    #[serde(default)]
+    pub disable_compression: bool,
+    /// Utilise un répertoire de build dans un tmpfs (`BUILDDIR`).
+    #[serde(default)]
+    pub compile_in_ram: bool,
+    /// Affiche la fenêtre de gestion des prompts de build Yay.
+    #[serde(default = "default_true")]
+    pub interactive_build_options: bool,
+}
+
+impl Default for YaySettings {
+    fn default() -> Self {
+        Self {
+            multicore: true,
+            disable_compression: false,
+            compile_in_ram: false,
+            interactive_build_options: true,
+        }
+    }
+}
+
+fn default_true() -> bool {
+    true
 }
 
 /// Chemin du fichier de configuration (`$XDG_CONFIG_HOME/noos-package-manager/settings.json`).
@@ -84,5 +118,36 @@ pub fn set_update_ignored(package: &str, ignored: bool) {
                 format!("Impossible d'enregistrer les mises à jour ignorées : {err}"),
             );
         }
+    }
+}
+
+/// Met à jour les préférences Yay et les sauvegarde.
+pub fn update_yay_settings(update: impl FnOnce(&mut YaySettings)) -> std::io::Result<()> {
+    let mut settings = load_settings();
+    update(&mut settings.yay);
+    save_settings(&settings)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn old_settings_get_yay_defaults() {
+        let settings: AppSettings =
+            serde_json::from_str(r#"{"ignored_updates":["aur:x"]}"#).unwrap();
+        assert!(settings.yay.multicore);
+        assert!(!settings.yay.disable_compression);
+        assert!(!settings.yay.compile_in_ram);
+        assert!(settings.yay.interactive_build_options);
+    }
+
+    #[test]
+    fn partial_yay_settings_get_defaults() {
+        let settings: AppSettings =
+            serde_json::from_str(r#"{"yay":{"disable_compression":true}}"#).unwrap();
+        assert!(settings.yay.multicore);
+        assert!(settings.yay.disable_compression);
+        assert!(settings.yay.interactive_build_options);
     }
 }

@@ -4,6 +4,7 @@ use crate::backend::models::{
     PackageSource, ReflectorMirror, ServiceRestartFailure,
 };
 use crate::backend::pacman::PacmanLockInfo;
+use crate::backend::yay_interaction::YayPromptKind;
 use crate::backend::CatalogSnapshot;
 
 #[derive(Debug, Clone)]
@@ -68,6 +69,10 @@ pub enum BackendCommand {
         commit: String,
     },
     CheckServices,
+    GetPacmanParallelDownloads,
+    SetPacmanParallelDownloads {
+        value: u8,
+    },
     ListReflectorMirrors,
     ApplyMirrorlist {
         servers: Vec<String>,
@@ -151,6 +156,9 @@ pub enum UiEvent {
         bytes: u64,
     },
     PacmanCacheError(String),
+    PacmanParallelDownloadsLoaded {
+        value: u8,
+    },
     ServicesNeedRestart {
         services: Vec<String>,
         kernel_status: Option<u32>,
@@ -159,5 +167,9 @@ pub enum UiEvent {
         restarted: Vec<String>,
         failures: Vec<ServiceRestartFailure>,
         kernel_status: Option<u32>,
+    },
+    YayPromptRequired {
+        request_id: u64,
+        prompt: YayPromptKind,
     },
 }

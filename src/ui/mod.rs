@@ -8,3 +8,4 @@ pub mod row;
 pub mod settings_page;
 pub mod style;
 pub mod window;
+pub mod yay_prompt_dialog;

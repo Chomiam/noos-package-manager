@@ -11,9 +11,12 @@ pub mod logging;
 pub mod models;
 pub mod needrestart;
 pub mod pacman;
+pub mod pacman_config;
 pub mod reflector;
 pub mod search;
 pub mod settings;
+pub mod yay_build;
+pub mod yay_interaction;
 
 #[cfg(test)]
 mod tests;

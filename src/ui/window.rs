@@ -22,6 +22,7 @@ use crate::ui::install_dialog::InstallManagerUi;
 use crate::ui::messages::{BackendCommand, UiEvent};
 use crate::ui::row::{build_aur_columns_header_row, build_package_action_row};
 use crate::ui::settings_page::SettingsView;
+use crate::ui::yay_prompt_dialog::show_yay_prompt;
 
 const MAX_RENDERED_ROWS: usize = 250;
 const AUR_PAGE_SIZE: usize = 8;
@@ -455,6 +456,7 @@ pub fn build_main_window(app: &adw::Application) -> adw::ApplicationWindow {
             header_title.set_label("Paramètres");
             stack.set_visible_child_name("settings");
             settings_view_ref.refresh_cache_size();
+            settings_view_ref.refresh_pacman_parallel_downloads();
             settings_view_ref.start_auto_refresh();
         });
     }
@@ -1131,6 +1133,12 @@ pub fn build_main_window(app: &adw::Application) -> adw::ApplicationWindow {
                             );
                         }
                     }
+                    UiEvent::YayPromptRequired {
+                        request_id,
+                        prompt,
+                    } => {
+                        show_yay_prompt(install_mgr_ui.window(), request_id, prompt);
+                    }
                     UiEvent::PackageDetailsLoaded(info) => {
                         actions_ui.details_dialog.show_details(&info);
                     }
@@ -1169,6 +1177,11 @@ pub fn build_main_window(app: &adw::Application) -> adw::ApplicationWindow {
                     }
                     UiEvent::PacmanCacheSize { bytes } => {
                         actions_ui.settings_view.on_cache_size(bytes);
+                    }
+                    UiEvent::PacmanParallelDownloadsLoaded { value } => {
+                        actions_ui
+                            .settings_view
+                            .on_pacman_parallel_downloads(value);
                     }
                     UiEvent::PacmanCacheError(detail) => {
                         actions_ui.settings_view.on_cache_error(&detail);
@@ -3961,6 +3974,47 @@ async fn handle_backend_command(
                     let _ = ui_tx
                         .send(UiEvent::OperationError {
                             title: String::from("Application des miroirs"),
+                            detail: err.to_string(),
+                        })
+                        .await;
+                }
+            }
+        }
+        BackendCommand::GetPacmanParallelDownloads => {
+            match backend::pacman_config::read_parallel_downloads().await {
+                Ok(value) => {
+                    let _ = ui_tx
+                        .send(UiEvent::PacmanParallelDownloadsLoaded { value })
+                        .await;
+                }
+                Err(err) => {
+                    let _ = ui_tx
+                        .send(UiEvent::OperationError {
+                            title: String::from("Lecture de la configuration Pacman"),
+                            detail: err.to_string(),
+                        })
+                        .await;
+                }
+            }
+        }
+        BackendCommand::SetPacmanParallelDownloads { value } => {
+            let elevation = Elevation::detect();
+            match backend::pacman_config::apply_parallel_downloads(&elevation, value).await {
+                Ok(message) => {
+                    let _ = ui_tx
+                        .send(UiEvent::OperationSuccess {
+                            message,
+                            reload_catalog: false,
+                        })
+                        .await;
+                    let _ = ui_tx
+                        .send(UiEvent::PacmanParallelDownloadsLoaded { value })
+                        .await;
+                }
+                Err(err) => {
+                    let _ = ui_tx
+                        .send(UiEvent::OperationError {
+                            title: String::from("Configuration Pacman"),
                             detail: err.to_string(),
                         })
                         .await;

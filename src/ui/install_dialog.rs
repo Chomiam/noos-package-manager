@@ -236,6 +236,10 @@ impl InstallManagerUi {
         self.is_installing.get()
     }
 
+    pub fn window(&self) -> &adw::Window {
+        &self.window
+    }
+
     pub fn cancel_installation(&self) {
         self.cancel_handle.cancel();
         self.is_installing.set(false);

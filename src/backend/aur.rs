@@ -12,6 +12,9 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 
 use crate::backend::elevation::Elevation;
+use crate::backend::yay_interaction::{
+    run_interactive_yay, PacmanNoconfirmWrapper, PtyCommandSpec,
+};
 use crate::backend::models::{
     AurHelper, AurPackageMeta, AurSortMode, DependencyStatus, DependencyStepItem,
     InstallCancelHandle, PackageItem, PackageSource,
@@ -631,8 +634,12 @@ async fn is_version_newer(installed: &str, candidate: &str) -> bool {
     candidate != installed
 }
 
-fn build_aur_helper_command(bin: &str, elevation: &Elevation) -> Command {
-    elevation.user_command(bin, &[])
+fn build_aur_helper_command(
+    bin: &str,
+    elevation: &Elevation,
+    envs: &[(String, String)],
+) -> Command {
+    elevation.user_command_with_env(bin, &[], envs)
 }
 
 /// Installe ou met à jour un paquet AUR via `yay`.
@@ -640,8 +647,10 @@ pub async fn install_or_update_aur_package(pkg_name: &str) -> AppResult<String> 
     let helper = detect_aur_helper().ok_or(AppError::AurHelperNotFound)?;
     let bin = helper.binary_name();
     let elevation = Elevation::detect();
+    let settings = crate::backend::settings::load_settings();
+    let build_env = crate::backend::yay_build::YayBuildEnv::prepare(&settings.yay)?;
 
-    let mut cmd = build_aur_helper_command(bin, &elevation);
+    let mut cmd = build_aur_helper_command(bin, &elevation, &build_env.env_pairs());
     cmd.stdin(Stdio::null())
         .args(["-S", "--aur", "--noconfirm", "--needed"]);
     cmd.args(elevation.yay_elevation_args());
@@ -653,8 +662,7 @@ pub async fn install_or_update_aur_package(pkg_name: &str) -> AppResult<String> 
             "None",
             "--answeredit",
             "None",
-            "--removemake",
-            "no",
+            "--noremovemake",
         ]);
     }
     cmd.arg(pkg_name);
@@ -741,6 +749,7 @@ pub(crate) struct YayTransaction<'a> {
     pub(crate) targets: &'a [String],
     pub(crate) phase: String,
     pub(crate) success_message: String,
+    pub(crate) interactive: bool,
 }
 
 /// Exécute une transaction `yay` en streaming (installation ou mise à jour).
@@ -762,6 +771,8 @@ pub(crate) async fn run_yay_transaction_streaming(
 
     let helper = detect_aur_helper().ok_or(AppError::AurHelperNotFound)?;
     let bin = helper.binary_name();
+    let settings = crate::backend::settings::load_settings();
+    let build_env = crate::backend::yay_build::YayBuildEnv::prepare(&settings.yay)?;
 
     crate::backend::pacman::ensure_stale_db_lock_removed(ui_tx, elevation).await;
 
@@ -781,9 +792,31 @@ pub(crate) async fn run_yay_transaction_streaming(
         })
         .await;
 
-    let mut cmd = build_aur_helper_command(bin, elevation);
-    cmd.stdin(Stdio::null()).args(transaction.yay_args);
+    let interactive = transaction.interactive
+        && build_env.interactive_build_options()
+        && !elevation.wraps_with_systemd_run();
+    let pacman_wrapper = if interactive {
+        Some(PacmanNoconfirmWrapper::new()?)
+    } else {
+        None
+    };
+    let yay_args: Vec<&str> = if interactive {
+        transaction
+            .yay_args
+            .iter()
+            .copied()
+            .filter(|argument| *argument != "--noconfirm")
+            .collect()
+    } else {
+        transaction.yay_args.to_vec()
+    };
+
+    let mut cmd = build_aur_helper_command(bin, elevation, &build_env.env_pairs());
+    cmd.args(&yay_args);
     cmd.args(elevation.yay_elevation_args());
+    if let Some(wrapper) = &pacman_wrapper {
+        cmd.arg("--pacman").arg(wrapper.path());
+    }
     if matches!(helper, AurHelper::Yay) {
         cmd.args([
             "--answerclean",
@@ -792,11 +825,25 @@ pub(crate) async fn run_yay_transaction_streaming(
             "None",
             "--answeredit",
             "None",
-            "--removemake",
-            "no",
+            "--noremovemake",
         ]);
     }
-    cmd.args(transaction.targets)
+    cmd.args(transaction.targets);
+
+    let success_message = transaction.success_message.clone();
+    if interactive {
+        let spec = PtyCommandSpec::from_command(&cmd);
+        return run_interactive_yay(
+            spec,
+            success_message,
+            known_deps,
+            cancel_handle,
+            ui_tx,
+        )
+        .await;
+    }
+
+    cmd.stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
@@ -890,7 +937,7 @@ pub(crate) async fn run_yay_transaction_streaming(
     };
 
     if status.success() {
-        Ok(transaction.success_message)
+        Ok(success_message)
     } else {
         if elevation.authentication_was_cancelled() {
             return Err(AppError::AurHelperError(String::from(
@@ -930,6 +977,7 @@ pub async fn install_aur_packages_streaming(
                 "{} paquet(s) AUR installés/mis à jour avec succès via yay.",
                 targets.len()
             ),
+            interactive: true,
         },
         known_deps,
         elevation,
@@ -963,6 +1011,7 @@ pub async fn install_mixed_packages_streaming(
                 "{} paquet(s) Pacman et AUR installés/mis à jour avec succès via yay.",
                 targets.len()
             ),
+            interactive: true,
         },
         known_deps,
         elevation,
@@ -989,6 +1038,7 @@ pub async fn update_all_via_yay_streaming(
             success_message: String::from(
                 "Mise à jour Pacman + AUR terminée avec succès via yay.",
             ),
+            interactive: false,
         },
         known_deps,
         elevation,

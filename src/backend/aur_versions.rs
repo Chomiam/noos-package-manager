@@ -76,6 +76,7 @@ pub async fn install_version(
                 "Installation de {package} {version} depuis l'historique AUR (une seule authentification)…"
             ),
             success_message: format!("{package} {version} installé depuis l'historique AUR."),
+            interactive: true,
         },
         &[],
         elevation,

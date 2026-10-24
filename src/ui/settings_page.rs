@@ -32,6 +32,13 @@ pub struct SettingsView {
     cache_spinner: gtk4::Spinner,
     clean_button: gtk4::Button,
     check_services_button: gtk4::Button,
+    pacman_row: adw::ActionRow,
+    pacman_spin: gtk4::SpinButton,
+    pacman_apply_button: gtk4::Button,
+    multicore_switch: adw::SwitchRow,
+    compression_switch: adw::SwitchRow,
+    ram_switch: adw::SwitchRow,
+    interactive_switch: adw::SwitchRow,
     cmd_tx: Sender<BackendCommand>,
 }
 
@@ -149,6 +156,67 @@ impl SettingsView {
         cache_group.add(&clean_row);
         root.add(&cache_group);
 
+        // --- Pacman ---
+        let pacman_group = adw::PreferencesGroup::builder()
+            .title("Pacman")
+            .description("Réglages appliqués à /etc/pacman.conf.")
+            .build();
+
+        let pacman_row = adw::ActionRow::builder()
+            .title("Téléchargements parallèles")
+            .subtitle("Valeur actuelle : chargement…")
+            .build();
+
+        let pacman_controls = gtk4::Box::new(gtk4::Orientation::Horizontal, 8);
+        pacman_controls.set_valign(gtk4::Align::Center);
+        let pacman_spin = gtk4::SpinButton::with_range(1.0, 20.0, 1.0);
+        pacman_spin.set_value(5.0);
+        pacman_spin.set_tooltip_text(Some("Valeur autorisée : 1 à 20 inclus"));
+        let pacman_apply = gtk4::Button::builder()
+            .label("Appliquer")
+            .tooltip_text("Écrit ParallelDownloads dans /etc/pacman.conf")
+            .build();
+        pacman_apply.add_css_class("suggested-action");
+        pacman_controls.append(&pacman_spin);
+        pacman_controls.append(&pacman_apply);
+        pacman_row.add_suffix(&pacman_controls);
+        pacman_group.add(&pacman_row);
+        root.add(&pacman_group);
+
+        // --- Yay ---
+        let yay_group = adw::PreferencesGroup::builder()
+            .title("Yay")
+            .description("Variables d'environnement appliquées à chaque compilation AUR.")
+            .build();
+
+        let yay_settings = crate::backend::settings::load_settings().yay;
+        let multicore_switch = adw::SwitchRow::builder()
+            .title("Compilation multi-cœur")
+            .subtitle("MAKEFLAGS=-jN avec N = nombre de cœurs disponibles")
+            .active(yay_settings.multicore)
+            .build();
+        let compression_switch = adw::SwitchRow::builder()
+            .title("Désactiver la compression des paquets")
+            .subtitle("PKGEXT=.pkg.tar · paquets plus volumineux")
+            .active(yay_settings.disable_compression)
+            .build();
+        let ram_switch = adw::SwitchRow::builder()
+            .title("Compiler en RAM")
+            .subtitle("BUILDDIR dans un tmpfs · consomme de la mémoire")
+            .active(yay_settings.compile_in_ram)
+            .build();
+        let interactive_switch = adw::SwitchRow::builder()
+            .title("Intercepter les choix de build")
+            .subtitle("Affiche les options du PKGBUILD et les fournisseurs dans une fenêtre")
+            .active(yay_settings.interactive_build_options)
+            .build();
+
+        yay_group.add(&multicore_switch);
+        yay_group.add(&compression_switch);
+        yay_group.add(&ram_switch);
+        yay_group.add(&interactive_switch);
+        root.add(&yay_group);
+
         let services_group = adw::PreferencesGroup::builder()
             .title("Services système")
             .description(
@@ -187,6 +255,13 @@ impl SettingsView {
             cache_spinner,
             clean_button,
             check_services_button,
+            pacman_row,
+            pacman_spin,
+            pacman_apply_button: pacman_apply,
+            multicore_switch,
+            compression_switch,
+            ram_switch,
+            interactive_switch,
             cmd_tx: cmd_tx.clone(),
         };
 
@@ -249,11 +324,54 @@ impl SettingsView {
 
         {
             let cmd_tx = self.cmd_tx.clone();
+            let view = self.clone();
+            self.pacman_apply_button.connect_clicked(move |_| {
+                let value = view.pacman_spin.value().round().clamp(1.0, 20.0) as u8;
+                view.pacman_row
+                    .set_subtitle(&format!("Application de ParallelDownloads = {value}…"));
+                let _ = cmd_tx.send(BackendCommand::SetPacmanParallelDownloads { value });
+            });
+        }
+
+        {
+            self.multicore_switch.connect_active_notify(move |row| {
+                save_yay_setting(|yay| yay.multicore = row.is_active());
+            });
+        }
+        {
+            self.compression_switch.connect_active_notify(move |row| {
+                save_yay_setting(|yay| yay.disable_compression = row.is_active());
+            });
+        }
+        {
+            self.ram_switch.connect_active_notify(move |row| {
+                save_yay_setting(|yay| yay.compile_in_ram = row.is_active());
+            });
+        }
+        {
+            self.interactive_switch.connect_active_notify(move |row| {
+                save_yay_setting(|yay| yay.interactive_build_options = row.is_active());
+            });
+        }
+
+        {
+            let cmd_tx = self.cmd_tx.clone();
             self.check_services_button.connect_clicked(move |button| {
                 button.set_sensitive(false);
                 let _ = cmd_tx.send(BackendCommand::CheckServices);
             });
         }
+
+        self.refresh_pacman_parallel_downloads();
+    }
+
+    /// Relit la valeur effective de `ParallelDownloads` depuis Pacman.
+    pub fn refresh_pacman_parallel_downloads(&self) {
+        self.pacman_row
+            .set_subtitle("Valeur actuelle : chargement…");
+        let _ = self
+            .cmd_tx
+            .send(BackendCommand::GetPacmanParallelDownloads);
     }
 
     pub fn root(&self) -> &adw::PreferencesPage {
@@ -374,6 +492,12 @@ impl SettingsView {
         self.cache_size_row.set_subtitle("Calcul en cours…");
     }
 
+    pub fn on_pacman_parallel_downloads(&self, value: u8) {
+        self.pacman_spin.set_value(value as f64);
+        self.pacman_row
+            .set_subtitle(&format!("Valeur actuelle : {value}"));
+    }
+
     pub fn on_cache_size(&self, bytes: u64) {
         self.cache_spinner.set_spinning(false);
         self.cache_spinner.set_visible(false);
@@ -410,6 +534,15 @@ impl SettingsView {
             .take(count)
             .map(|mirror| mirror.url.clone())
             .collect()
+    }
+}
+
+fn save_yay_setting(update: impl FnOnce(&mut crate::backend::settings::YaySettings)) {
+    if let Err(err) = crate::backend::settings::update_yay_settings(update) {
+        crate::backend::logging::log_warn(
+            "settings",
+            format!("Impossible d'enregistrer les préférences Yay : {err}"),
+        );
     }
 }
 
