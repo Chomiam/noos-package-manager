@@ -1,6 +1,6 @@
 [package]
 name = "noos-package-manager"
-version = "0.1.7"
+version = "0.1.8"
 edition = "2021"
 authors = ["Chomiam <axel.valens@ik.me>"]
 description = "Gestionnaire de paquets graphique moderne en Rust (GTK4 / Libadwaita) et outil CLI (noos-up) pour Arch Linux supportant Pacman, l'AUR (RPC v5 + yay), Flatpak (Flathub) et les AppImages"
