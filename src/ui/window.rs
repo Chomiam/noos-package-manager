@@ -1156,6 +1156,7 @@ pub fn build_main_window(app: &adw::Application) -> adw::ApplicationWindow {
                     UiEvent::MirrorListLoaded(mirrors) => {
                         spinner_ui.set_spinning(false);
                         spinner_ui.set_visible(false);
+                        backend::reflector::save_cached_mirrors(&mirrors);
                         actions_ui.settings_view.on_mirror_list_loaded(mirrors);
                     }
                     UiEvent::MirrorListApplied { message } => {

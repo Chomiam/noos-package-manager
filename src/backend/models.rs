@@ -145,7 +145,7 @@ pub struct AurVersionInfo {
 }
 
 /// Un miroir Pacman tel que retourné par Reflector, avec son débit mesuré.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ReflectorMirror {
     pub url: String,
     pub country: String,

@@ -1,15 +1,97 @@
 use std::collections::HashMap;
+use std::env;
+use std::fs;
+use std::path::PathBuf;
 use std::process::Stdio;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use serde::{Deserialize, Serialize};
 use tokio::process::Command;
 
 use crate::backend::elevation::Elevation;
+use crate::backend::logging::log_warn;
 use crate::backend::models::ReflectorMirror;
 use crate::error::{AppError, AppResult};
 
 const REFLECTOR_TIMEOUT: Duration = Duration::from_secs(180);
 const MIRROR_COUNT: usize = 15;
+const MIRROR_CACHE_VERSION: u32 = 1;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct MirrorCache {
+    version: u32,
+    saved_at_unix: u64,
+    mirrors: Vec<ReflectorMirror>,
+}
+
+/// Chemin du cache des derniers résultats Reflector.
+fn mirror_cache_file_path() -> Option<PathBuf> {
+    let base_dir = env::var_os("XDG_CACHE_HOME")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| {
+            env::var_os("HOME")
+                .filter(|value| !value.is_empty())
+                .map(|home| PathBuf::from(home).join(".cache"))
+        })?;
+
+    Some(
+        base_dir
+            .join("noos-package-manager")
+            .join("reflector_mirrors_v1.json"),
+    )
+}
+
+/// Charge les derniers miroirs testés et leur date de sauvegarde.
+pub fn load_cached_mirrors() -> Option<(Vec<ReflectorMirror>, u64)> {
+    let path = mirror_cache_file_path()?;
+    let bytes = fs::read(&path).ok()?;
+    let cache: MirrorCache = serde_json::from_slice(&bytes).ok()?;
+    if cache.version != MIRROR_CACHE_VERSION || cache.mirrors.is_empty() {
+        return None;
+    }
+    Some((cache.mirrors, cache.saved_at_unix))
+}
+
+/// Sauvegarde les derniers résultats Reflector pour un affichage immédiat
+/// à la prochaine ouverture des paramètres.
+pub fn save_cached_mirrors(mirrors: &[ReflectorMirror]) {
+    if mirrors.is_empty() {
+        return;
+    }
+    let Some(path) = mirror_cache_file_path() else {
+        return;
+    };
+    let Some(parent) = path.parent() else {
+        return;
+    };
+    if fs::create_dir_all(parent).is_err() {
+        return;
+    }
+
+    let saved_at_unix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0);
+    let payload = MirrorCache {
+        version: MIRROR_CACHE_VERSION,
+        saved_at_unix,
+        mirrors: mirrors.to_vec(),
+    };
+    let Ok(bytes) = serde_json::to_vec(&payload) else {
+        return;
+    };
+
+    let tmp_path = parent.join(".reflector_mirrors_v1.json.tmp");
+    if fs::write(&tmp_path, bytes).is_ok() {
+        if let Err(err) = fs::rename(&tmp_path, &path) {
+            log_warn(
+                "reflector",
+                format!("Impossible d'enregistrer le cache des miroirs : {err}"),
+            );
+        }
+    }
+}
 
 /// Analyse les miroirs Arch avec Reflector et retourne leur débit mesuré.
 ///

@@ -9,8 +9,9 @@ use gtk4::prelude::*;
 use libadwaita as adw;
 use libadwaita::prelude::*;
 
+use crate::backend::appimage::format_unix_timestamp;
 use crate::backend::models::ReflectorMirror;
-use crate::backend::reflector::{format_rate, mirror_display_name};
+use crate::backend::reflector::{format_rate, load_cached_mirrors, mirror_display_name};
 use crate::ui::messages::BackendCommand;
 
 #[derive(Clone)]
@@ -191,6 +192,17 @@ impl SettingsView {
 
         view.connect_handlers();
         view.refresh_cache_size();
+
+        // Affiche immédiatement les derniers résultats connus, avant que la
+        // nouvelle analyse Reflector n'ait terminé.
+        if let Some((mirrors, saved_at)) = load_cached_mirrors() {
+            view.on_mirror_list_loaded(mirrors);
+            view.set_mirror_status(&format!(
+                "Résultats en cache du {} · actualisation en cours…",
+                format_unix_timestamp(saved_at)
+            ));
+        }
+
         view
     }
 
