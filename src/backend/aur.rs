@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 
+use crate::backend::elevation::Elevation;
 use crate::backend::models::{
     AurHelper, AurPackageMeta, AurSortMode, DependencyStatus, DependencyStepItem,
     InstallCancelHandle, PackageItem, PackageSource,
@@ -630,53 +631,20 @@ async fn is_version_newer(installed: &str, candidate: &str) -> bool {
     candidate != installed
 }
 
-fn build_aur_helper_command(bin: &str) -> Command {
-    if crate::backend::pacman::has_no_new_privileges()
-        && Path::new("/usr/bin/systemd-run").exists()
-    {
-        let mut cmd = Command::new("systemd-run");
-        cmd.args([
-            "--user",
-            "--pipe",
-            "--wait",
-            "--quiet",
-            "--collect",
-            "--setenv=LC_ALL=C",
-            "--setenv=PACMAN_AUTH=pkexec",
-        ]);
-        for var in [
-            "DISPLAY",
-            "WAYLAND_DISPLAY",
-            "XAUTHORITY",
-            "XDG_RUNTIME_DIR",
-            "DBUS_SESSION_BUS_ADDRESS",
-            "HOME",
-            "USER",
-            "PATH",
-        ] {
-            if let Ok(val) = env::var(var) {
-                if !val.is_empty() {
-                    cmd.arg(format!("--setenv={var}={val}"));
-                }
-            }
-        }
-        cmd.arg(bin);
-        cmd
-    } else {
-        let mut cmd = Command::new(bin);
-        cmd.env("LC_ALL", "C").env("PACMAN_AUTH", "pkexec");
-        cmd
-    }
+fn build_aur_helper_command(bin: &str, elevation: &Elevation) -> Command {
+    elevation.user_command(bin, &[])
 }
 
 /// Installe ou met à jour un paquet AUR via `yay`.
 pub async fn install_or_update_aur_package(pkg_name: &str) -> AppResult<String> {
     let helper = detect_aur_helper().ok_or(AppError::AurHelperNotFound)?;
     let bin = helper.binary_name();
+    let elevation = Elevation::detect();
 
-    let mut cmd = build_aur_helper_command(bin);
+    let mut cmd = build_aur_helper_command(bin, &elevation);
     cmd.stdin(Stdio::null())
-        .args(["-S", "--aur", "--noconfirm", "--needed", "--sudo", "pkexec"]);
+        .args(["-S", "--aur", "--noconfirm", "--needed"]);
+    cmd.args(elevation.yay_elevation_args());
     if matches!(helper, AurHelper::Yay) {
         cmd.args([
             "--answerclean",
@@ -699,17 +667,29 @@ pub async fn install_or_update_aur_package(pkg_name: &str) -> AppResult<String> 
             helper.display_name()
         ))
     } else {
-        // Repli sur lancement dans un terminal interactif si pkexec/noconfirm échoue sur une interaction GPG/PKGBUILD
-        if try_spawn_terminal_aur_command(bin, pkg_name).is_ok() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let detail = if !stderr.is_empty() { stderr } else { stdout };
+
+        // Ne pas relancer une invite de mot de passe dans un terminal si l'échec
+        // provient déjà de l'authentification askpass.
+        let auth_failed = detail.contains("incorrect password")
+            || detail.contains("askpass")
+            || detail.contains("not authorized")
+            || detail.contains("dismissed")
+            || detail.contains("no password")
+            || detail.contains("sudo:")
+            || detail.contains("Authentification");
+
+        // Repli sur lancement dans un terminal interactif si la transaction échoue
+        // sur une interaction GPG/PKGBUILD.
+        if !auth_failed && try_spawn_terminal_aur_command(bin, pkg_name).is_ok() {
             return Ok(format!(
                 "Installation de « {pkg_name} » ouverte dans le terminal avec {}.",
                 helper.display_name()
             ));
         }
 
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        let detail = if !stderr.is_empty() { stderr } else { stdout };
         Err(AppError::AurHelperError(format!(
             "Échec de {} pour « {pkg_name} » : {detail}",
             helper.display_name()
@@ -755,49 +735,55 @@ fn try_spawn_terminal_aur_command(helper_bin: &str, pkg_name: &str) -> AppResult
         "Aucun terminal graphique disponible pour l'installation interactive",
     )))
 }
+/// Paramètres d'une transaction yay en streaming.
+struct YayTransaction<'a> {
+    yay_args: &'a [&'a str],
+    targets: &'a [String],
+    phase: String,
+    action_label: &'a str,
+}
 
-/// Installe un lot de paquets AUR via `yay` en diffusant les journaux et étapes de progression.
-pub async fn install_aur_packages_streaming(
-    targets: &[String],
+/// Exécute une transaction `yay` en streaming (installation ou mise à jour).
+///
+/// Le lancement via `--sudoloop` garantit qu'une seule authentification sudo est
+/// demandée, y compris lorsque la transaction installe des paquets Pacman et AUR.
+async fn run_yay_transaction_streaming(
+    transaction: YayTransaction<'_>,
     known_deps: &[String],
+    elevation: &Elevation,
     cancel_handle: &InstallCancelHandle,
     ui_tx: &async_channel::Sender<UiEvent>,
 ) -> AppResult<String> {
-    if targets.is_empty() {
-        return Ok(String::from("Aucun paquet AUR à installer."));
-    }
     if cancel_handle.is_cancelled() {
         return Err(AppError::AurHelperError(String::from(
-            "Installation annulée par l'utilisateur.",
+            "Opération annulée par l'utilisateur.",
         )));
     }
 
     let helper = detect_aur_helper().ok_or(AppError::AurHelperNotFound)?;
     let bin = helper.binary_name();
 
-    crate::backend::pacman::ensure_stale_db_lock_removed(ui_tx).await;
+    crate::backend::pacman::ensure_stale_db_lock_removed(ui_tx, elevation).await;
 
     let _ = ui_tx
         .send(UiEvent::InstallProgress {
-            phase: format!(
-                "Démarrage de {} pour installer {} paquet(s) AUR…",
-                helper.display_name(),
-                targets.len()
-            ),
+            phase: transaction.phase,
             fraction: 0.10,
-            active_package: targets
+            active_package: transaction
+                .targets
                 .first()
                 .map(|n| (n.clone(), DependencyStatus::Downloading)),
             log_line: Some(format!(
-                "$ {bin} -S --aur --noconfirm --sudo pkexec {}",
-                targets.join(" ")
+                "$ {bin} {} {}",
+                transaction.yay_args.join(" "),
+                transaction.targets.join(" ")
             )),
         })
         .await;
 
-    let mut cmd = build_aur_helper_command(bin);
-    cmd.stdin(Stdio::null())
-        .args(["-S", "--aur", "--noconfirm", "--sudo", "pkexec"]);
+    let mut cmd = build_aur_helper_command(bin, elevation);
+    cmd.stdin(Stdio::null()).args(transaction.yay_args);
+    cmd.args(elevation.yay_elevation_args());
     if matches!(helper, AurHelper::Yay) {
         cmd.args([
             "--answerclean",
@@ -810,7 +796,7 @@ pub async fn install_aur_packages_streaming(
             "no",
         ]);
     }
-    cmd.args(targets)
+    cmd.args(transaction.targets)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
@@ -828,14 +814,14 @@ pub async fn install_aur_packages_streaming(
                     let _ = child.wait().await;
                     let _ = ui_tx
                         .send(UiEvent::InstallProgress {
-                            phase: String::from("Installation AUR annulée par l'utilisateur."),
+                            phase: String::from("Opération annulée par l'utilisateur."),
                             fraction: -1.0,
                             active_package: None,
-                            log_line: Some(String::from("[Annulé] Transaction AUR interrompue à la demande de l'utilisateur.")),
+                            log_line: Some(String::from("[Annulé] Transaction interrompue à la demande de l'utilisateur.")),
                         })
                         .await;
                     return Err(AppError::AurHelperError(String::from(
-                        "Installation annulée par l'utilisateur.",
+                        "Opération annulée par l'utilisateur.",
                     )));
                 }
                 res = reader.next_line() => res.ok().flatten(),
@@ -897,19 +883,33 @@ pub async fn install_aur_packages_streaming(
             let _ = child.start_kill();
             let _ = child.wait().await;
             return Err(AppError::AurHelperError(String::from(
-                "Installation annulée par l'utilisateur.",
+                "Opération annulée par l'utilisateur.",
             )));
         }
         st = child.wait() => st?,
     };
 
     if status.success() {
-        Ok(format!(
-            "{} paquet(s) AUR installés/mis à jour avec succès via {}.",
-            targets.len(),
-            helper.display_name()
-        ))
+        if transaction.targets.is_empty() {
+            Ok(format!(
+                "{} terminée avec succès via {}.",
+                transaction.action_label,
+                helper.display_name()
+            ))
+        } else {
+            Ok(format!(
+                "{} paquet(s) {} installés/mis à jour avec succès via {}.",
+                transaction.targets.len(),
+                transaction.action_label,
+                helper.display_name()
+            ))
+        }
     } else {
+        if elevation.authentication_was_cancelled() {
+            return Err(AppError::AurHelperError(String::from(
+                "Authentification administrateur annulée.",
+            )));
+        }
         let detail = if stderr_buf.trim().is_empty() {
             format!("Code de sortie {}", status.code().unwrap_or(1))
         } else {
@@ -917,4 +917,88 @@ pub async fn install_aur_packages_streaming(
         };
         Err(AppError::AurHelperError(detail))
     }
+}
+
+/// Installe un lot de paquets AUR via `yay` en diffusant les journaux et étapes de progression.
+pub async fn install_aur_packages_streaming(
+    targets: &[String],
+    known_deps: &[String],
+    elevation: &Elevation,
+    cancel_handle: &InstallCancelHandle,
+    ui_tx: &async_channel::Sender<UiEvent>,
+) -> AppResult<String> {
+    if targets.is_empty() {
+        return Ok(String::from("Aucun paquet AUR à installer."));
+    }
+
+    run_yay_transaction_streaming(
+        YayTransaction {
+            yay_args: &["-S", "--aur", "--noconfirm"],
+            targets,
+            phase: format!(
+                "Installation de {} paquet(s) AUR via yay (une seule authentification)…",
+                targets.len()
+            ),
+            action_label: "AUR",
+        },
+        known_deps,
+        elevation,
+        cancel_handle,
+        ui_tx,
+    )
+    .await
+}
+
+/// Installe un lot mixte Pacman + AUR en une seule transaction `yay`.
+pub async fn install_mixed_packages_streaming(
+    targets: &[String],
+    known_deps: &[String],
+    elevation: &Elevation,
+    cancel_handle: &InstallCancelHandle,
+    ui_tx: &async_channel::Sender<UiEvent>,
+) -> AppResult<String> {
+    if targets.is_empty() {
+        return Ok(String::from("Aucun paquet Pacman ou AUR à installer."));
+    }
+
+    run_yay_transaction_streaming(
+        YayTransaction {
+            yay_args: &["-S", "--noconfirm", "--needed"],
+            targets,
+            phase: format!(
+                "Installation de {} paquet(s) Pacman et AUR via yay (une seule authentification)…",
+                targets.len()
+            ),
+            action_label: "Pacman et AUR",
+        },
+        known_deps,
+        elevation,
+        cancel_handle,
+        ui_tx,
+    )
+    .await
+}
+
+/// Met à jour simultanément les paquets Pacman et AUR via une seule commande `yay -Syu`.
+pub async fn update_all_via_yay_streaming(
+    known_deps: &[String],
+    elevation: &Elevation,
+    cancel_handle: &InstallCancelHandle,
+    ui_tx: &async_channel::Sender<UiEvent>,
+) -> AppResult<String> {
+    run_yay_transaction_streaming(
+        YayTransaction {
+            yay_args: &["-Syu", "--noconfirm"],
+            targets: &[],
+            phase: String::from(
+                "Mise à jour globale Pacman + AUR via yay (une seule authentification)…",
+            ),
+            action_label: "Mise à jour Pacman + AUR",
+        },
+        known_deps,
+        elevation,
+        cancel_handle,
+        ui_tx,
+    )
+    .await
 }

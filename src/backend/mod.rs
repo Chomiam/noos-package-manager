@@ -3,6 +3,7 @@ pub mod aur;
 pub mod cache;
 pub mod catalog;
 pub mod details;
+pub mod elevation;
 pub mod flatpak;
 pub mod install;
 pub mod logging;

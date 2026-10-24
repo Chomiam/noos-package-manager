@@ -251,7 +251,8 @@ async fn main() {
                         let _ = terminal.clear();
                         let _ = crossterm::terminal::disable_raw_mode();
                         println!("\n  🔐 Authentification administrateur (sudo) requise pour mettre à jour les paquets système :");
-                        let ok = std::process::Command::new("pkexec")
+                        println!("     Une seule saisie couvrira les mises à jour Pacman et AUR.\n");
+                        let ok = std::process::Command::new(sudo_bin())
                             .arg("-v")
                             .stdin(Stdio::inherit())
                             .stdout(Stdio::inherit())
@@ -675,15 +676,26 @@ async fn run_update_pipeline(check_only: bool, tx: mpsc::UnboundedSender<WorkerE
         return;
     }
 
-    // Si des mises à jour Pacman ou Yay sont présentes, s'assurer que sudo est actif
+    // Si des mises à jour Pacman ou Yay sont présentes, authentifier sudo une seule fois
+    // pour toute l'opération (Pacman + AUR).
+    let mut use_sudo = false;
     if !pacman_upds.is_empty() || !yay_upds.is_empty() {
-        if !ensure_pkexec_authenticated(&tx).await {
+        use_sudo = sudo_is_usable();
+        let authenticated = if use_sudo {
+            let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+            let _ = tx.send(WorkerEvent::NeedSudoAuth { reply: reply_tx });
+            reply_rx.await.unwrap_or(false)
+        } else {
+            true
+        };
+
+        if !authenticated {
             let _ = tx.send(WorkerEvent::StageChanged(
                 SourceKind::Pacman,
-                StageState::Failed(String::from("Authentification sudo annulée")),
+                StageState::Failed(String::from("Authentification administrateur annulée")),
             ));
             let _ = tx.send(WorkerEvent::PhaseChanged {
-                phase: String::from("Échec de l'authentification administrateur (sudo)."),
+                phase: String::from("Échec de l'authentification administrateur."),
                 progress: 1.0,
             });
             let _ = tx.send(WorkerEvent::Finished {
@@ -694,7 +706,7 @@ async fn run_update_pipeline(check_only: bool, tx: mpsc::UnboundedSender<WorkerE
             });
             return;
         }
-        cleanup_stale_pacman_lock().await;
+        cleanup_stale_pacman_lock(use_sudo).await;
     }
 
     let mut had_errors = false;
@@ -710,12 +722,21 @@ async fn run_update_pipeline(check_only: bool, tx: mpsc::UnboundedSender<WorkerE
             StageState::Updating { done: 0, total },
         ));
         let _ = tx.send(WorkerEvent::PhaseChanged {
-            phase: format!("Mise à jour des {total} paquet(s) Pacman (`sudo pacman -Syu`)…"),
+            phase: format!(
+                "Mise à jour des {total} paquet(s) Pacman (`pacman -Syu`)…"
+            ),
             progress: 0.20,
         });
 
-        let mut cmd = Command::new("pkexec");
-        cmd.args(["pacman", "-Syu", "--noconfirm"]);
+        let mut cmd = if use_sudo {
+            let mut cmd = Command::new(sudo_bin());
+            cmd.args(["-n", "pacman", "-Syu", "--noconfirm"]);
+            cmd
+        } else {
+            let mut cmd = Command::new("pkexec");
+            cmd.args(["pacman", "-Syu", "--noconfirm"]);
+            cmd
+        };
         let ok = run_streaming_command(
             &mut cmd,
             SourceKind::Pacman,
@@ -774,6 +795,12 @@ async fn run_update_pipeline(check_only: bool, tx: mpsc::UnboundedSender<WorkerE
             "--answeredit",
             "None",
         ]);
+        if use_sudo {
+            // Réutilise le ticket sudo obtenu une seule fois avant la mise à jour.
+            cmd.env_remove("PACMAN_AUTH");
+            cmd.arg("--sudo").arg(sudo_bin());
+            cmd.arg("--sudoloop");
+        }
         let ok = run_streaming_command(
             &mut cmd,
             SourceKind::Yay,
@@ -896,40 +923,37 @@ async fn run_update_pipeline(check_only: bool, tx: mpsc::UnboundedSender<WorkerE
     });
 }
 
-async fn ensure_pkexec_authenticated(_tx: &mpsc::UnboundedSender<WorkerEvent>) -> bool {
-    // Si déjà root, pas besoin d'élever les privilèges.
-    let is_root = std::process::Command::new("id")
-        .arg("-u")
-        .output()
-        .ok()
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .map(|s| s.trim() == "0")
-        .unwrap_or(false);
-    if is_root {
-        return true;
-    }
+fn sudo_bin() -> std::path::PathBuf {
+    ["/usr/bin/sudo", "/usr/local/bin/sudo", "/bin/sudo"]
+        .iter()
+        .map(std::path::PathBuf::from)
+        .find(|path| path.is_file())
+        .unwrap_or_else(|| std::path::PathBuf::from("sudo"))
+}
 
-    // Vérifie que pkexec est disponible.
-    // L'authentification Polkit interviendra au moment de l'exécution des commandes
-    // privilégiées (boîte de dialogue graphique ou invite dans le terminal).
-    std::process::Command::new("pkexec")
-        .arg("--version")
+fn sudo_is_usable() -> bool {
+    let output = std::process::Command::new(sudo_bin())
+        .env("LC_ALL", "C")
+        .args(["-n", "-l"])
+        .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
+        .stderr(Stdio::piped())
+        .output();
+
+    match output {
+        Ok(output) if output.status.success() => true,
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr).to_lowercase();
+            stderr.contains("password")
+                || stderr.contains("tty")
+                || stderr.contains("askpass")
+                || stderr.contains("terminal")
+        }
+        Err(_) => false,
+    }
 }
 
-/// Keepalive factice conservé pour compatibilité : pkexec ne nécessite pas de
-/// renouvelrement de ticket comme sudo, cette fonction est donc un no-op documenté.
-#[allow(dead_code)]
-fn spawn_pkexec_keepalive() {
-    // pkexec n'a pas de mécanisme de keepalive persistant ; chaque invocation
-    // est authentifiée individuellement par Polkit.
-}
-
-async fn cleanup_stale_pacman_lock() {
+async fn cleanup_stale_pacman_lock(use_sudo: bool) {
     if !std::path::Path::new("/var/lib/pacman/db.lck").exists() {
         return;
     }
@@ -943,8 +967,16 @@ async fn cleanup_stale_pacman_lock() {
         .unwrap_or(false);
 
     if !pacman_running {
-        let _ = Command::new("pkexec")
-            .args(["rm", "-f", "/var/lib/pacman/db.lck"])
+        let mut cmd = if use_sudo {
+            let mut cmd = Command::new(sudo_bin());
+            cmd.args(["-n", "rm", "-f", "/var/lib/pacman/db.lck"]);
+            cmd
+        } else {
+            let mut cmd = Command::new("pkexec");
+            cmd.args(["rm", "-f", "/var/lib/pacman/db.lck"]);
+            cmd
+        };
+        let _ = cmd
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status()

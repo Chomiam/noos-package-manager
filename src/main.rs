@@ -65,6 +65,12 @@ fn terminate_stale_or_sandboxed_instances() {
 }
 
 fn main() -> glib::ExitCode {
+    // Mode interne utilisé par `sudo -A` : le binaire se comporte alors comme un
+    // assistant graphique askpass et ne doit surtout pas démarrer l'application.
+    if std::env::var_os(crate::backend::elevation::ASKPASS_MODE_ENV).is_some() {
+        ui::askpass::run_askpass();
+    }
+
     terminate_stale_or_sandboxed_instances();
     glib::set_application_name("Gestionnaire de paquets");
 

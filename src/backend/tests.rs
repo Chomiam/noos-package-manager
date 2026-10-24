@@ -16,6 +16,10 @@ use crate::backend::details::{
     extract_github_from_url, markdown_to_pango_markup, parse_pacman_detail_fields,
     resolve_github_owner_repo,
 };
+use crate::backend::elevation::{
+    askpass_session_is_safe, authentication_is_cancelled, mark_authentication_cancelled, Elevation,
+    ASKPASS_SESSION_ENV,
+};
 use crate::backend::flatpak::{
     parse_flatpak_list_output, parse_flatpak_progress_line, parse_flatpak_remote_info,
     parse_flatpak_search_output, parse_flatpak_size_to_bytes,
@@ -660,6 +664,143 @@ fn test_shared_aur_client_initializes_lazily() -> TestResult {
         std::ptr::eq(client, again),
         "les appels suivants doivent réutiliser la même instance partagée"
     );
+
+    Ok(())
+}
+
+#[test]
+fn test_askpass_session_cancellation() -> TestResult {
+    let dir = TempDir::new()?;
+    fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o700))?;
+
+    assert!(!authentication_is_cancelled(dir.path()));
+    mark_authentication_cancelled(dir.path());
+    assert!(authentication_is_cancelled(dir.path()));
+
+    Ok(())
+}
+
+#[test]
+fn test_askpass_session_path_validation() -> TestResult {
+    let other_dir = TempDir::new()?;
+    assert!(
+        !askpass_session_is_safe(other_dir.path()),
+        "un répertoire hors de XDG_RUNTIME_DIR doit être refusé"
+    );
+
+    let Some(runtime_dir) = std::env::var_os("XDG_RUNTIME_DIR") else {
+        return Ok(());
+    };
+    let runtime_dir = std::path::PathBuf::from(runtime_dir);
+
+    let dir = tempfile::Builder::new()
+        .prefix("noos-askpass-test-")
+        .tempdir_in(&runtime_dir)?;
+    fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o700))?;
+    assert!(askpass_session_is_safe(dir.path()));
+
+    Ok(())
+}
+
+#[test]
+fn test_sudo_elevation_keeps_password_out_of_yay_env() -> TestResult {
+    let elevation = Elevation::detect();
+    if !matches!(elevation, Elevation::Sudo(_)) {
+        // Environnement sans sudo (ou exécution en root) : rien à vérifier.
+        return Ok(());
+    }
+
+    let command = elevation.build_command("pacman");
+    let std_command = command.as_std();
+    let args: Vec<String> = std_command
+        .get_args()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect();
+
+    assert!(
+        std_command
+            .get_program()
+            .to_string_lossy()
+            .ends_with("sudo"),
+        "la commande doit utiliser sudo"
+    );
+    assert!(args.iter().any(|arg| arg == "-A"));
+    assert_eq!(args.last().map(String::as_str), Some("pacman"));
+
+    let envs: HashMap<String, Option<String>> = std_command
+        .get_envs()
+        .map(|(key, value)| {
+            (
+                key.to_string_lossy().into_owned(),
+                value.map(|v| v.to_string_lossy().into_owned()),
+            )
+        })
+        .collect();
+
+    assert_eq!(
+        envs.get(crate::backend::elevation::ASKPASS_MODE_ENV)
+            .and_then(|value| value.as_deref()),
+        Some("1")
+    );
+    assert!(envs
+        .get("SUDO_ASKPASS")
+        .and_then(|value| value.as_deref())
+        .is_some());
+    assert!(envs
+        .get(ASKPASS_SESSION_ENV)
+        .and_then(|value| value.as_deref())
+        .is_some());
+    assert_eq!(
+        envs.get("SUDO_ASKPASS_REQUIRE")
+            .and_then(|value| value.as_deref()),
+        Some("force")
+    );
+
+    // La commande yay ne doit pas exposer SUDO_ASKPASS aux PKGBUILD : c'est le
+    // wrapper sudo qui configure l'askpass, pas l'environnement de yay.
+    let yay_command = elevation.user_command("yay", &[]);
+    let yay_envs: HashMap<String, Option<String>> = yay_command
+        .as_std()
+        .get_envs()
+        .map(|(key, value)| {
+            (
+                key.to_string_lossy().into_owned(),
+                value.map(|v| v.to_string_lossy().into_owned()),
+            )
+        })
+        .collect();
+
+    assert_eq!(
+        yay_envs.get("SUDO_ASKPASS").cloned().flatten(),
+        None,
+        "SUDO_ASKPASS ne doit pas être transmis à yay/PKGBUILD"
+    );
+    assert_eq!(
+        yay_envs.get(ASKPASS_SESSION_ENV).cloned().flatten(),
+        None,
+        "le répertoire de session askpass ne doit pas être transmis à yay/PKGBUILD"
+    );
+
+    let yay_args = elevation.yay_elevation_args();
+    assert!(yay_args.iter().any(|arg| arg == "--sudoloop"));
+    let wrapper_path = yay_args
+        .iter()
+        .find(|arg| arg.ends_with("sudo-askpass.sh"))
+        .ok_or("le chemin du wrapper sudo est absent")?;
+
+    let wrapper = fs::read_to_string(wrapper_path)?;
+    assert!(wrapper.contains("SUDO_ASKPASS="));
+    assert!(wrapper.contains("exec "));
+    assert!(!wrapper.contains("password"));
+
+    let mode = fs::metadata(wrapper_path)?.permissions().mode();
+    assert_eq!(mode & 0o777, 0o700, "le wrapper sudo doit être privé");
+
+    let syntax = std::process::Command::new("sh")
+        .arg("-n")
+        .arg(wrapper_path)
+        .status()?;
+    assert!(syntax.success(), "le wrapper sudo doit être un script valide");
 
     Ok(())
 }

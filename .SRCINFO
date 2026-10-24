@@ -14,6 +14,7 @@ pkgbase = noos-package-manager
 	depends = gcc-libs
 	depends = pacman
 	depends = pacman-contrib
+	depends = sudo
 	depends = yay
 	depends = flatpak
 	depends = polkit

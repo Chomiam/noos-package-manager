@@ -3,6 +3,7 @@ use std::path::PathBuf;
 
 use crate::backend::appimage;
 use crate::backend::aur::shared_aur_client;
+use crate::backend::elevation::Elevation;
 use crate::backend::flatpak;
 use crate::backend::models::{
     DependencyStatus, DependencyStepItem, InstallCancelHandle, OptionalDependencyItem,
@@ -290,6 +291,10 @@ pub async fn install_batch_with_progress(
         .map(|i| i.flatpak_app_id().unwrap_or(&i.name).to_string())
         .collect();
 
+    // Une seule commande yay couvre Pacman + AUR ; elle déclenche au plus une
+    // authentification sudo grâce à --sudoloop.
+    let elevation = Elevation::detect();
+
     let mut all_deps: Vec<DependencyStepItem> = Vec::new();
 
     if !pacman_targets.is_empty() {
@@ -344,11 +349,38 @@ pub async fn install_batch_with_progress(
         matches!(i.source, PackageSource::Pacman) && (i.update_available.is_some() || i.is_installed)
     });
 
-    if !pacman_targets.is_empty() {
+    if !pacman_targets.is_empty() && !aur_targets.is_empty() {
+        // Une seule transaction yay pour Pacman + AUR : une seule authentification sudo.
+        let mut combined_targets = pacman_targets.clone();
+        combined_targets.extend(aur_targets.iter().cloned());
+
+        match crate::backend::aur::install_mixed_packages_streaming(
+            &combined_targets,
+            &known_dep_names,
+            &elevation,
+            cancel_handle,
+            ui_tx,
+        )
+        .await
+        {
+            Ok(msg) => summary_messages.push(msg),
+            Err(err) => {
+                let _ = ui_tx
+                    .send(UiEvent::InstallFinished {
+                        success: false,
+                        message: format!("Échec de l'installation Pacman + AUR : {err}"),
+                        installed_ids: Vec::new(),
+                    })
+                    .await;
+                return;
+            }
+        }
+    } else if !pacman_targets.is_empty() {
         match crate::backend::pacman::install_packages_streaming(
             &pacman_targets,
             &known_dep_names,
             pacman_has_updates,
+            &elevation,
             cancel_handle,
             ui_tx,
         )
@@ -366,12 +398,11 @@ pub async fn install_batch_with_progress(
                 return;
             }
         }
-    }
-
-    if !aur_targets.is_empty() {
+    } else if !aur_targets.is_empty() {
         match crate::backend::aur::install_aur_packages_streaming(
             &aur_targets,
             &known_dep_names,
+            &elevation,
             cancel_handle,
             ui_tx,
         )
@@ -433,7 +464,7 @@ pub async fn install_batch_with_progress(
                                     .send(UiEvent::InstallFinished {
                                         success: false,
                                         message: format!(
-                                            "La mise à jour de « {} » n'a pas été appliquée (version installée toujours {}). Vérifiez l'élévation de privilèges Polkit.",
+                                            "La mise à jour de « {} » n'a pas été appliquée (version installée toujours {}). Vérifiez l'authentification administrateur.",
                                             item.name, inst_ver
                                         ),
                                         installed_ids: Vec::new(),
@@ -612,7 +643,7 @@ pub async fn load_more_aur_discovery_wave(wave_index: usize) -> Vec<PackageItem>
         .collect()
 }
 
-/// Exécute la mise à jour globale de tous les paquets système (Pacman via `pkexec pacman -Syu`),
+/// Exécute la mise à jour globale de tous les paquets système (Pacman via `pacman -Syu`),
 /// AUR (via `yay`) et Flatpak (`flatpak update`) avec suivi dans le Gestionnaire d'installation.
 pub async fn update_all_system_and_aur_with_progress(
     catalog_update_items: &[PackageItem],
@@ -728,30 +759,17 @@ pub async fn update_all_system_and_aur_with_progress(
         })
         .await;
 
+    // Une seule commande yay (-Syu) couvre Pacman + AUR : une seule authentification sudo.
+    let elevation = Elevation::detect();
+    let has_pacman_updates = !pacman_updates.is_empty();
+    let has_aur_updates = !aur_target_names.is_empty();
+
     let mut summaries = Vec::new();
 
-    if !pacman_updates.is_empty()
-        || (aur_updates.is_empty() && flatpak_updates.is_empty() && appimage_updates.is_empty())
-    {
-        match crate::backend::pacman::update_pacman_all_streaming(&known_names, cancel_handle, ui_tx).await {
-            Ok(msg) => summaries.push(msg),
-            Err(err) => {
-                let _ = ui_tx
-                    .send(UiEvent::InstallFinished {
-                        success: false,
-                        message: format!("Échec de la mise à jour Pacman : {err}"),
-                        installed_ids: Vec::new(),
-                    })
-                    .await;
-                return;
-            }
-        }
-    }
-
-    if !aur_target_names.is_empty() {
-        match crate::backend::aur::install_aur_packages_streaming(
-            &aur_target_names,
+    if has_pacman_updates && has_aur_updates {
+        match crate::backend::aur::update_all_via_yay_streaming(
             &known_names,
+            &elevation,
             cancel_handle,
             ui_tx,
         )
@@ -762,11 +780,61 @@ pub async fn update_all_system_and_aur_with_progress(
                 let _ = ui_tx
                     .send(UiEvent::InstallFinished {
                         success: false,
-                        message: format!("Échec de la mise à jour AUR : {err}"),
+                        message: format!("Échec de la mise à jour Pacman + AUR : {err}"),
                         installed_ids: Vec::new(),
                     })
                     .await;
                 return;
+            }
+        }
+    } else {
+        let will_run_pacman = has_pacman_updates
+            || (aur_updates.is_empty() && flatpak_updates.is_empty() && appimage_updates.is_empty());
+
+        if will_run_pacman {
+            match crate::backend::pacman::update_pacman_all_streaming(
+                &known_names,
+                &elevation,
+                cancel_handle,
+                ui_tx,
+            )
+            .await
+            {
+                Ok(msg) => summaries.push(msg),
+                Err(err) => {
+                    let _ = ui_tx
+                        .send(UiEvent::InstallFinished {
+                            success: false,
+                            message: format!("Échec de la mise à jour Pacman : {err}"),
+                            installed_ids: Vec::new(),
+                        })
+                        .await;
+                    return;
+                }
+            }
+        }
+
+        if has_aur_updates {
+            match crate::backend::aur::install_aur_packages_streaming(
+                &aur_target_names,
+                &known_names,
+                &elevation,
+                cancel_handle,
+                ui_tx,
+            )
+            .await
+            {
+                Ok(msg) => summaries.push(msg),
+                Err(err) => {
+                    let _ = ui_tx
+                        .send(UiEvent::InstallFinished {
+                            success: false,
+                            message: format!("Échec de la mise à jour AUR : {err}"),
+                            installed_ids: Vec::new(),
+                        })
+                        .await;
+                    return;
+                }
             }
         }
     }
@@ -819,7 +887,7 @@ pub async fn update_all_system_and_aur_with_progress(
                         .send(UiEvent::InstallFinished {
                             success: false,
                             message: format!(
-                                "La mise à jour de « {pkg_name} » n'a pas été appliquée (toujours en version {inst_ver}). Vérifiez l'authentification Polkit."
+                                "La mise à jour de « {pkg_name} » n'a pas été appliquée (toujours en version {inst_ver}). Vérifiez l'authentification administrateur."
                             ),
                             installed_ids: Vec::new(),
                         })

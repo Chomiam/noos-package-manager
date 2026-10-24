@@ -4,6 +4,7 @@ use std::process::Stdio;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 
+use crate::backend::elevation::Elevation;
 use crate::backend::models::{
     DependencyStatus, DependencyStepItem, InstallCancelHandle, PackageItem, PackageSource,
     RecommendationCategory,
@@ -735,7 +736,10 @@ pub async fn wait_for_active_pacman(ui_tx: &async_channel::Sender<UiEvent>) {
 }
 
 /// Supprime un éventuel verrou `/var/lib/pacman/db.lck` orphelin avant d'exécuter l'assistant `yay`.
-pub async fn ensure_stale_db_lock_removed(ui_tx: &async_channel::Sender<UiEvent>) {
+pub async fn ensure_stale_db_lock_removed(
+    ui_tx: &async_channel::Sender<UiEvent>,
+    elevation: &Elevation,
+) {
     wait_for_active_pacman(ui_tx).await;
     if std::path::Path::new("/var/lib/pacman/db.lck").exists()
         && !is_pacman_process_running().await
@@ -745,14 +749,16 @@ pub async fn ensure_stale_db_lock_removed(ui_tx: &async_channel::Sender<UiEvent>
                 phase: String::from("Suppression du verrou Pacman orphelin (/var/lib/pacman/db.lck)…"),
                 fraction: 0.04,
                 active_package: None,
-                log_line: Some(String::from(
-                    "$ pkexec rm -f /var/lib/pacman/db.lck",
+                log_line: Some(format!(
+                    "$ {} rm -f /var/lib/pacman/db.lck",
+                    elevation.label()
                 )),
             })
             .await;
-        let _ = build_pkexec_command()
+        let _ = elevation
+            .build_command("rm")
             .stdin(Stdio::null())
-            .args(["rm", "-f", "/var/lib/pacman/db.lck"])
+            .args(["-f", "/var/lib/pacman/db.lck"])
             .output()
             .await;
     }
@@ -948,12 +954,13 @@ pub async fn search_packages(
     Ok(parse_pacman_ss_output(&stdout, updates_map))
 }
 
-/// Installe un paquet officiel via `pkexec pacman -Sy --noconfirm --needed`.
+/// Installe un paquet officiel via `pacman -Sy --noconfirm --needed`.
 pub async fn install_package(pkg_name: &str) -> AppResult<String> {
-    let output = build_pkexec_command()
+    let elevation = Elevation::detect();
+    let output = elevation
+        .build_command("sh")
         .stdin(Stdio::null())
         .args([
-            "sh",
             "-c",
             PACMAN_UNLOCK_AND_EXEC_SCRIPT,
             "--",
@@ -977,12 +984,13 @@ pub async fn install_package(pkg_name: &str) -> AppResult<String> {
     }
 }
 
-/// Met à jour un paquet officiel via `pkexec pacman -Sy --noconfirm`.
+/// Met à jour un paquet officiel via `pacman -Sy --noconfirm`.
 pub async fn update_package(pkg_name: &str) -> AppResult<String> {
-    let output = build_pkexec_command()
+    let elevation = Elevation::detect();
+    let output = elevation
+        .build_command("sh")
         .stdin(Stdio::null())
         .args([
-            "sh",
             "-c",
             PACMAN_UNLOCK_AND_EXEC_SCRIPT,
             "--",
@@ -1005,12 +1013,13 @@ pub async fn update_package(pkg_name: &str) -> AppResult<String> {
     }
 }
 
-/// Met à jour l'ensemble des paquets système via `pkexec pacman -Syu --noconfirm`.
+/// Met à jour l'ensemble des paquets système via `pacman -Syu --noconfirm`.
 pub async fn update_all_system_packages() -> AppResult<String> {
-    let output = build_pkexec_command()
+    let elevation = Elevation::detect();
+    let output = elevation
+        .build_command("sh")
         .stdin(Stdio::null())
         .args([
-            "sh",
             "-c",
             PACMAN_UNLOCK_AND_EXEC_SCRIPT,
             "--",
@@ -1034,12 +1043,13 @@ pub async fn update_all_system_packages() -> AppResult<String> {
     }
 }
 
-/// Désinstalle un paquet via `pkexec pacman -Rns --noconfirm`.
+/// Désinstalle un paquet via `pacman -Rns --noconfirm`.
 pub async fn remove_package(pkg_name: &str) -> AppResult<String> {
-    let output = build_pkexec_command()
+    let elevation = Elevation::detect();
+    let output = elevation
+        .build_command("sh")
         .stdin(Stdio::null())
         .args([
-            "sh",
             "-c",
             PACMAN_UNLOCK_AND_EXEC_SCRIPT,
             "--",
@@ -1292,12 +1302,13 @@ fn match_package_from_filename_token(token: &str, known_deps: &[String]) -> Stri
     }
 }
 
-/// Installe ou met à jour un lot de paquets Pacman via `pkexec pacman -Sy --noconfirm` en diffusant
+/// Installe ou met à jour un lot de paquets Pacman via `pacman -Sy --noconfirm` en diffusant
 /// en temps réel la progression de téléchargement et d'installation des dépendances.
 pub async fn install_packages_streaming(
     targets: &[String],
     known_deps: &[String],
     has_updates: bool,
+    elevation: &Elevation,
     cancel_handle: &InstallCancelHandle,
     ui_tx: &async_channel::Sender<UiEvent>,
 ) -> AppResult<String> {
@@ -1319,7 +1330,8 @@ pub async fn install_packages_streaming(
     };
 
     let cmd_preview = format!(
-        "$ pkexec pacman {} {}",
+        "$ {} pacman {} {}",
+        elevation.label(),
         base_args.join(" "),
         targets.join(" ")
     );
@@ -1327,7 +1339,7 @@ pub async fn install_packages_streaming(
     let _ = ui_tx
         .send(UiEvent::InstallProgress {
             phase: String::from(
-                "Élévation de privilèges administrateur (Polkit) et synchronisation Pacman…",
+                "Élévation de privilèges administrateur et synchronisation Pacman…",
             ),
             fraction: 0.04,
             active_package: None,
@@ -1335,9 +1347,10 @@ pub async fn install_packages_streaming(
         })
         .await;
 
-    let mut child = build_pkexec_command()
+    let mut child = elevation
+        .build_command("sh")
         .stdin(Stdio::null())
-        .args(["sh", "-c", PACMAN_UNLOCK_AND_EXEC_SCRIPT, "--"])
+        .args(["-c", PACMAN_UNLOCK_AND_EXEC_SCRIPT, "--"])
         .args(base_args)
         .args(targets)
         .stdout(Stdio::piped())
@@ -1441,10 +1454,15 @@ pub async fn install_packages_streaming(
             targets.len()
         ))
     } else {
+        if elevation.authentication_was_cancelled() {
+            return Err(AppError::PacmanError(String::from(
+                "Authentification administrateur annulée.",
+            )));
+        }
         let exit_code = status.code().unwrap_or(1);
         let detail = if exit_code == 126 || exit_code == 127 || stderr_buf.contains("dismissed") || stderr_buf.contains("Not authorized") {
             format!(
-                "Élévation de privilèges (Polkit) refusée ou annulée (code {exit_code}) : {}",
+                "Élévation de privilèges administrateur refusée ou annulée (code {exit_code}) : {}",
                 stderr_buf.trim()
             )
         } else if stderr_buf.trim().is_empty() {
@@ -1456,10 +1474,11 @@ pub async fn install_packages_streaming(
     }
 }
 
-/// Met à jour tous les paquets des dépôts officiels via `pkexec pacman -Syu --noconfirm`
+/// Met à jour tous les paquets des dépôts officiels via `pacman -Syu --noconfirm`
 /// avec diffusion temps réel de la progression et prise en charge de l'annulation.
 pub async fn update_pacman_all_streaming(
     known_deps: &[String],
+    elevation: &Elevation,
     cancel_handle: &InstallCancelHandle,
     ui_tx: &async_channel::Sender<UiEvent>,
 ) -> AppResult<String> {
@@ -1474,18 +1493,21 @@ pub async fn update_pacman_all_streaming(
     let _ = ui_tx
         .send(UiEvent::InstallProgress {
             phase: String::from(
-                "Élévation de privilèges (Polkit) et mise à jour des dépôts officiels (`pkexec pacman -Syu`)…",
+                "Élévation de privilèges administrateur et mise à jour des dépôts officiels (`pacman -Syu`)…",
             ),
             fraction: 0.05,
             active_package: None,
-            log_line: Some(String::from("$ pkexec pacman -Syu --noconfirm")),
+            log_line: Some(format!(
+                "$ {} pacman -Syu --noconfirm",
+                elevation.label()
+            )),
         })
         .await;
 
-    let mut child = build_pkexec_command()
+    let mut child = elevation
+        .build_command("sh")
         .stdin(Stdio::null())
         .args([
-            "sh",
             "-c",
             PACMAN_UNLOCK_AND_EXEC_SCRIPT,
             "--",
@@ -1586,6 +1608,11 @@ pub async fn update_pacman_all_streaming(
             "Mises à jour Pacman terminées avec succès.",
         ))
     } else {
+        if elevation.authentication_was_cancelled() {
+            return Err(AppError::PacmanError(String::from(
+                "Authentification administrateur annulée.",
+            )));
+        }
         let exit_code = status.code().unwrap_or(1);
         let detail = if exit_code == 126
             || exit_code == 127
@@ -1593,7 +1620,7 @@ pub async fn update_pacman_all_streaming(
             || stderr_buf.contains("Not authorized")
         {
             format!(
-                "Élévation de privilèges (Polkit) refusée ou annulée (code {exit_code}) : {}",
+                "Élévation de privilèges administrateur refusée ou annulée (code {exit_code}) : {}",
                 stderr_buf.trim()
             )
         } else if stderr_buf.trim().is_empty() {

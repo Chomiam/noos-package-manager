@@ -58,7 +58,7 @@ Il réunit au sein d'une seule interface fluide (compatible avec les thèmes GNO
 ### Commande CLI `noos-up` (Ratatui)
 - Utilitaire en ligne de commande avec interface **Ratatui** (`Viewport::Inline`) permettant de vérifier (`noos-up --check`) et d'appliquer (`noos-up`) en une seule commande toutes les mises à jour **Pacman**, **Yay (AUR)** et **Flatpak** avec badges colorés, barre de progression et flux temps réel.
 - Mode non-TTY avec fallback textuel pour l'exécution dans des scripts ou via SSH.
-- Élévation de privilèges unifiée via **pkexec** (Polkit), cohérente avec l'interface graphique.
+- Élévation de privilèges **unique par opération** : `sudo` est validé une seule fois via un assistant `askpass` graphique intégré (aucun mot de passe n'est stocké sur disque), puis réutilisé pour toutes les commandes Pacman et AUR de l'installation ou de la mise à jour. Les transactions mixtes Pacman + AUR sont exécutées en une seule commande `yay --sudoloop`. Repli automatique sur `pkexec` (Polkit) si `sudo` est absent.
 
 ### Fiches détaillées & README intégrés
 - Bouton d'information `ℹ` sur chaque paquet ouvrant une fenêtre contextuelle avec métadonnées complètes, liens directs vers le **Site officiel** et **GitHub**, et rendu natif du **README** (GitHub / GitLab / Flathub / documentation locale).
@@ -106,7 +106,7 @@ noos-up --help
 
 #### Prérequis système (Arch Linux)
 ```bash
-sudo pacman -S --needed rust cargo gtk4 libadwaita pacman-contrib flatpak polkit git
+sudo pacman -S --needed rust cargo gtk4 libadwaita pacman-contrib flatpak polkit sudo git
 ```
 
 #### Compilation et exécution
@@ -143,7 +143,8 @@ src/
 │   ├── catalog.rs          # Chargement, rafraîchissement et différentiel du catalogue
 │   ├── install.rs          # Installation, mise à jour, suppression, dépendances optionnelles
 │   ├── search.rs           # Recherche combinée Pacman / AUR / Flatpak / AppImage
-│   ├── pacman.rs           # Interactions avec pacman / checkupdates / pkexec
+│   ├── pacman.rs           # Interactions avec pacman / checkupdates
+│   ├── elevation.rs        # Session sudo unique + assistant askpass par opération
 │   ├── aur.rs              # Client AUR RPC v5 partagé + intégration yay
 │   ├── flatpak.rs          # Intégration Flatpak / Flathub
 │   ├── appimage.rs         # Gestion locale des AppImages
@@ -153,6 +154,7 @@ src/
 └── ui/
     ├── mod.rs
     ├── window.rs           # Fenêtre principale (GTK4 / Libadwaita)
+    ├── askpass.rs          # Assistant graphique de mot de passe (sudo -A)
     ├── sidebar.rs          # Volet latéral
     ├── row.rs              # Lignes de paquets et colonnes AUR
     ├── icons.rs            # Résolution des icônes (WhiteSur, hicolor, breeze)

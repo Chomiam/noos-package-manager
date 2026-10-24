@@ -13,6 +13,7 @@ depends=(
   'gcc-libs'
   'pacman'
   'pacman-contrib'
+  'sudo'
   'yay'
   'flatpak'
   'polkit'
