@@ -839,12 +839,14 @@ fn test_reflector_output_parsing() {
 http://mirrors.niyawe.de/archlinux/$repo/os/$arch
 active          : True
 country         : Germany
+country_code    : DE
 protocol        : http
 delay           : 219
 
 https://berlin.mirror.pkgbuild.com/$repo/os/$arch
 active          : True
 country         : Germany
+country_code    : DE
 protocol        : https
 delay           : 68
 ";
@@ -857,6 +859,7 @@ delay           : 68
     assert_eq!(mirrors.len(), 2);
     assert_eq!(mirrors[0].url, "http://mirrors.niyawe.de/archlinux");
     assert_eq!(mirrors[0].country, "Germany");
+    assert_eq!(mirrors[0].country_code, "DE");
     assert_eq!(mirrors[0].rate_kib_s, 30300.32);
     assert_eq!(mirrors[1].url, "https://berlin.mirror.pkgbuild.com");
     assert_eq!(mirrors[1].protocol, "https");

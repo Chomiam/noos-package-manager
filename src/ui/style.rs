@@ -133,6 +133,85 @@ row.aur-pagination-row {
     border-color: @accent_color;
     background-color: alpha(@accent_bg_color, 0.20);
 }
+
+/* --- Tableau des miroirs Arch (Paramètres) --- */
+.mirror-table {
+    border: 1px solid alpha(@window_fg_color, 0.10);
+    border-radius: 10px;
+    background-color: alpha(@window_fg_color, 0.015);
+}
+
+.mirror-table-header {
+    padding: 7px 12px;
+    background-color: alpha(@window_fg_color, 0.055);
+    border-bottom: 1px solid alpha(@window_fg_color, 0.10);
+}
+
+.mirror-table-header-label {
+    font-size: 0.73em;
+    font-weight: 800;
+    letter-spacing: 0.05em;
+    opacity: 0.70;
+}
+
+.mirror-table-row {
+    padding: 8px 12px;
+    border-bottom: 1px solid alpha(@window_fg_color, 0.06);
+}
+
+.mirror-table-row:hover {
+    background-color: alpha(@accent_bg_color, 0.06);
+}
+
+.mirror-table-row-alt {
+    background-color: alpha(@window_fg_color, 0.015);
+}
+
+.mirror-host {
+    font-weight: 600;
+}
+
+.mirror-protocol-badge {
+    padding: 1px 6px;
+    border-radius: 5px;
+    font-size: 0.68em;
+    font-weight: 800;
+    background-color: alpha(@window_fg_color, 0.08);
+    opacity: 0.75;
+}
+
+.mirror-flag {
+    font-size: 1.25em;
+}
+
+.mirror-country {
+    font-size: 0.9em;
+}
+
+.mirror-speed-pill {
+    padding: 3px 9px;
+    border-radius: 999px;
+    font-size: 0.78em;
+    font-weight: 800;
+    font-variant-numeric: tabular-nums;
+    background-color: alpha(@accent_bg_color, 0.16);
+    color: @accent_color;
+}
+
+.mirror-speed-fast {
+    background-color: alpha(@success_bg_color, 0.18);
+    color: @success_color;
+}
+
+.mirror-speed-medium {
+    background-color: alpha(@warning_bg_color, 0.18);
+    color: @warning_color;
+}
+
+.mirror-speed-slow {
+    background-color: alpha(@error_bg_color, 0.16);
+    color: @error_color;
+}
 "#;
 
 pub fn load_css() {

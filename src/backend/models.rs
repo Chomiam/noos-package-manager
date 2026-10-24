@@ -149,6 +149,7 @@ pub struct AurVersionInfo {
 pub struct ReflectorMirror {
     pub url: String,
     pub country: String,
+    pub country_code: String,
     pub protocol: String,
     pub rate_kib_s: f64,
     pub delay_hours: f64,

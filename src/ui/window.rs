@@ -455,8 +455,10 @@ pub fn build_main_window(app: &adw::Application) -> adw::ApplicationWindow {
             header_title.set_label("Paramètres");
             stack.set_visible_child_name("settings");
             settings_view_ref.refresh_cache_size();
+            settings_view_ref.start_auto_refresh();
         });
     }
+
 
 
     // Alerte à la fermeture de l'application si une installation est en cours

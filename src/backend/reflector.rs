@@ -143,6 +143,7 @@ pub(crate) fn parse_reflector_output(stdout: &str, stderr: &str) -> Vec<Reflecto
         }
 
         let mut country = String::new();
+        let mut country_code = String::new();
         let mut protocol = String::new();
         let mut delay_hours = 0.0;
 
@@ -153,6 +154,7 @@ pub(crate) fn parse_reflector_output(stdout: &str, stderr: &str) -> Vec<Reflecto
             let value = value.trim();
             match key.trim() {
                 "country" => country = value.to_string(),
+                "country_code" => country_code = value.to_string(),
                 "protocol" => protocol = value.to_string(),
                 "delay" => delay_hours = value.parse::<f64>().unwrap_or(0.0),
                 _ => {}
@@ -163,6 +165,7 @@ pub(crate) fn parse_reflector_output(stdout: &str, stderr: &str) -> Vec<Reflecto
         mirrors.push(ReflectorMirror {
             url,
             country,
+            country_code,
             protocol,
             rate_kib_s,
             delay_hours,

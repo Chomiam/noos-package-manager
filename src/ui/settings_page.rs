@@ -2,7 +2,9 @@ use std::cell::RefCell;
 use std::collections::HashSet;
 use std::rc::Rc;
 use std::sync::mpsc::Sender;
+use std::time::Duration;
 
+use gtk4::glib;
 use gtk4::prelude::*;
 use libadwaita as adw;
 use libadwaita::prelude::*;
@@ -14,11 +16,12 @@ use crate::ui::messages::BackendCommand;
 #[derive(Clone)]
 pub struct SettingsView {
     root: adw::PreferencesPage,
-    mirror_group: adw::PreferencesGroup,
-    mirror_rows: Rc<RefCell<Vec<adw::ActionRow>>>,
+    mirror_table_rows: gtk4::Box,
+    mirror_rows: Rc<RefCell<Vec<gtk4::Box>>>,
     mirror_status: gtk4::Label,
     mirror_spinner: gtk4::Spinner,
-    analyze_button: gtk4::Button,
+    mirror_loading: Rc<std::cell::Cell<bool>>,
+    refresh_source: Rc<RefCell<Option<gtk4::glib::SourceId>>>,
     apply_best_button: gtk4::Button,
     apply_selection_button: gtk4::Button,
     mirrors: Rc<RefCell<Vec<ReflectorMirror>>>,
@@ -38,14 +41,24 @@ impl SettingsView {
         let mirror_group = adw::PreferencesGroup::builder()
             .title("Miroirs Pacman (Reflector)")
             .description(
-                "Analyse les miroirs Arch, mesure leur débit et permet d'appliquer \
-                 les meilleurs ou une sélection manuelle.",
+                "Analyse les miroirs Arch et actualise leur débit automatiquement \
+                 toutes les 4 secondes tant que cette page est ouverte.",
             )
             .build();
 
-        let mirror_rows = Rc::new(RefCell::new(Vec::new()));
+        let mirror_table = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
+        mirror_table.add_css_class("mirror-table");
+        mirror_table.set_margin_top(6);
+        mirror_table.set_margin_bottom(6);
+        mirror_table.append(&build_mirror_table_header());
+
+        let mirror_table_rows = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
+        mirror_table.append(&mirror_table_rows);
+        mirror_group.add(&mirror_table);
+
+        let mirror_rows: Rc<RefCell<Vec<gtk4::Box>>> = Rc::new(RefCell::new(Vec::new()));
         let mirror_status = gtk4::Label::builder()
-            .label("Cliquez sur « Analyser les miroirs » pour commencer.")
+            .label("Les miroirs sont analysés automatiquement à l'ouverture des paramètres.")
             .xalign(0.0)
             .wrap(true)
             .css_classes(["dim-label"])
@@ -72,12 +85,6 @@ impl SettingsView {
         mirror_buttons.set_margin_end(4);
         mirror_buttons.set_halign(gtk4::Align::End);
 
-        let analyze_button = gtk4::Button::builder()
-            .label("Analyser les miroirs")
-            .tooltip_text("Interroge Reflector et mesure le débit des miroirs récents")
-            .build();
-        analyze_button.add_css_class("suggested-action");
-
         let apply_best_button = gtk4::Button::builder()
             .label("Appliquer les 5 meilleurs")
             .tooltip_text("Écrit les 5 miroirs les plus rapides dans /etc/pacman.d/mirrorlist")
@@ -88,7 +95,6 @@ impl SettingsView {
             .tooltip_text("Écrit uniquement les miroirs cochés dans /etc/pacman.d/mirrorlist")
             .build();
 
-        mirror_buttons.append(&analyze_button);
         mirror_buttons.append(&apply_selection_button);
         mirror_buttons.append(&apply_best_button);
         mirror_group.add(&mirror_buttons);
@@ -154,11 +160,12 @@ impl SettingsView {
 
         let view = Self {
             root,
-            mirror_group,
+            mirror_table_rows,
             mirror_rows,
             mirror_status,
             mirror_spinner,
-            analyze_button,
+            mirror_loading: Rc::new(std::cell::Cell::new(false)),
+            refresh_source: Rc::new(RefCell::new(None)),
             apply_best_button,
             apply_selection_button,
             mirrors: Rc::new(RefCell::new(Vec::new())),
@@ -179,20 +186,11 @@ impl SettingsView {
         {
             let cmd_tx = self.cmd_tx.clone();
             let view = self.clone();
-            self.analyze_button.connect_clicked(move |_| {
-                view.set_mirror_loading();
-                let _ = cmd_tx.send(BackendCommand::ListReflectorMirrors);
-            });
-        }
-
-        {
-            let cmd_tx = self.cmd_tx.clone();
-            let view = self.clone();
             self.apply_best_button.connect_clicked(move |_| {
                 let servers = view.best_servers(5);
                 if servers.is_empty() {
                     view.set_mirror_status(
-                        "Analysez d'abord les miroirs avant d'appliquer une liste.",
+                        "Les miroirs sont en cours d'analyse. Réessayez dans quelques secondes.",
                     );
                     return;
                 }
@@ -241,70 +239,65 @@ impl SettingsView {
     pub fn set_mirror_loading(&self) {
         self.mirror_spinner.set_visible(true);
         self.mirror_spinner.set_spinning(true);
-        self.analyze_button.set_sensitive(false);
-        self.apply_best_button.set_sensitive(false);
-        self.apply_selection_button.set_sensitive(false);
-        self.set_mirror_status("Analyse des miroirs et mesure des débits en cours…");
+        self.set_mirror_status("Actualisation des miroirs et mesure des débits en cours…");
+    }
+
+    /// Démarre l'actualisation automatique (toutes les 4 s) tant que la page est visible.
+    pub fn start_auto_refresh(&self) {
+        self.refresh_mirrors_if_idle();
+        if self.refresh_source.borrow().is_some() {
+            return;
+        }
+
+        let view = self.clone();
+        let source = glib::timeout_add_local(Duration::from_secs(4), move || {
+            if view.root.is_mapped() {
+                view.refresh_mirrors_if_idle();
+            }
+            glib::ControlFlow::Continue
+        });
+        *self.refresh_source.borrow_mut() = Some(source);
+    }
+
+    fn refresh_mirrors_if_idle(&self) {
+        if self.mirror_loading.replace(true) {
+            return;
+        }
+        self.set_mirror_loading();
+        let _ = self.cmd_tx.send(BackendCommand::ListReflectorMirrors);
     }
 
     pub fn on_mirror_list_loaded(&self, mirrors: Vec<ReflectorMirror>) {
         self.mirror_spinner.set_spinning(false);
         self.mirror_spinner.set_visible(false);
-        self.analyze_button.set_sensitive(true);
-        self.apply_best_button.set_sensitive(true);
-        self.apply_selection_button.set_sensitive(true);
+        self.mirror_loading.set(false);
 
         for row in self.mirror_rows.borrow_mut().drain(..) {
-            self.mirror_group.remove(&row);
+            self.mirror_table_rows.remove(&row);
         }
 
+        let first_load = self.mirrors.borrow().is_empty();
         {
             let mut selected = self.selected_mirrors.borrow_mut();
-            selected.clear();
-            for (index, mirror) in mirrors.iter().enumerate() {
-                if index < 5 {
+            if first_load {
+                selected.clear();
+                for mirror in mirrors.iter().take(5) {
                     selected.insert(mirror.url.clone());
                 }
+            } else {
+                selected.retain(|url| mirrors.iter().any(|mirror| &mirror.url == url));
             }
         }
 
         for (index, mirror) in mirrors.iter().enumerate() {
-            let country = if mirror.country.is_empty() {
-                String::from("Pays inconnu")
-            } else {
-                mirror.country.clone()
-            };
-            let subtitle = format!(
-                "{} · {} · {}",
-                country,
-                format_rate(mirror.rate_kib_s),
-                mirror.protocol.to_uppercase()
+            let checked = self.selected_mirrors.borrow().contains(&mirror.url);
+            let row = build_mirror_table_row(
+                mirror,
+                index,
+                checked,
+                Rc::clone(&self.selected_mirrors),
             );
-
-            let row = adw::ActionRow::builder()
-                .title(mirror_display_name(&mirror.url))
-                .subtitle(subtitle)
-                .build();
-            row.set_tooltip_text(Some(&mirror.url));
-
-            let check = gtk4::CheckButton::builder()
-                .active(index < 5)
-                .valign(gtk4::Align::Center)
-                .tooltip_text("Cocher pour inclure ce miroir dans la sélection manuelle")
-                .build();
-            let selected = Rc::clone(&self.selected_mirrors);
-            let url = mirror.url.clone();
-            check.connect_toggled(move |button| {
-                if button.is_active() {
-                    selected.borrow_mut().insert(url.clone());
-                } else {
-                    selected.borrow_mut().remove(&url);
-                }
-            });
-            row.add_prefix(&check);
-            row.set_activatable_widget(Some(&check));
-
-            self.mirror_group.add(&row);
+            self.mirror_table_rows.append(&row);
             self.mirror_rows.borrow_mut().push(row);
         }
 
@@ -313,7 +306,7 @@ impl SettingsView {
             self.set_mirror_status("Aucun miroir retourné par Reflector.");
         } else {
             self.set_mirror_status(&format!(
-                "{} miroir(s) analysé(s). Les 5 meilleurs sont présélectionnés.",
+                "{} miroir(s) analysé(s) · actualisation automatique active.",
                 mirrors.len()
             ));
         }
@@ -322,15 +315,11 @@ impl SettingsView {
     pub fn on_mirror_error(&self, detail: &str) {
         self.mirror_spinner.set_spinning(false);
         self.mirror_spinner.set_visible(false);
-        self.analyze_button.set_sensitive(true);
-        self.apply_best_button.set_sensitive(true);
-        self.apply_selection_button.set_sensitive(true);
+        self.mirror_loading.set(false);
         self.set_mirror_status(&format!("Erreur Reflector : {detail}"));
     }
 
     pub fn on_mirrorlist_applied(&self, message: &str) {
-        self.apply_best_button.set_sensitive(true);
-        self.apply_selection_button.set_sensitive(true);
         self.set_mirror_status(message);
     }
 
@@ -386,6 +375,167 @@ impl SettingsView {
             .map(|mirror| mirror.url.clone())
             .collect()
     }
+}
+
+fn build_mirror_table_header() -> gtk4::Box {
+    let header = gtk4::Box::new(gtk4::Orientation::Horizontal, 12);
+    header.add_css_class("mirror-table-header");
+    header.set_valign(gtk4::Align::Center);
+
+    let check_spacer = gtk4::Box::builder().width_request(30).build();
+    header.append(&check_spacer);
+
+    let mirror_label = gtk4::Label::builder()
+        .label("MIROIR")
+        .xalign(0.0)
+        .hexpand(true)
+        .css_classes(["mirror-table-header-label"])
+        .build();
+    header.append(&mirror_label);
+
+    let location_label = gtk4::Label::builder()
+        .label("LOCALISATION")
+        .xalign(0.0)
+        .width_request(210)
+        .css_classes(["mirror-table-header-label"])
+        .build();
+    header.append(&location_label);
+
+    let speed_label = gtk4::Label::builder()
+        .label("VITESSE")
+        .xalign(1.0)
+        .width_request(125)
+        .css_classes(["mirror-table-header-label"])
+        .build();
+    header.append(&speed_label);
+
+    header
+}
+
+fn build_mirror_table_row(
+    mirror: &ReflectorMirror,
+    index: usize,
+    checked: bool,
+    selected_mirrors: Rc<RefCell<HashSet<String>>>,
+) -> gtk4::Box {
+    let row = gtk4::Box::new(gtk4::Orientation::Horizontal, 12);
+    row.add_css_class("mirror-table-row");
+    if index % 2 == 1 {
+        row.add_css_class("mirror-table-row-alt");
+    }
+    row.set_valign(gtk4::Align::Center);
+    row.set_tooltip_text(Some(&mirror.url));
+
+    let check_slot = gtk4::Box::builder()
+        .width_request(30)
+        .halign(gtk4::Align::Center)
+        .valign(gtk4::Align::Center)
+        .build();
+    let check = gtk4::CheckButton::builder()
+        .active(checked)
+        .valign(gtk4::Align::Center)
+        .tooltip_text("Cocher pour inclure ce miroir dans la sélection manuelle")
+        .build();
+    let selected = Rc::clone(&selected_mirrors);
+    let url = mirror.url.clone();
+    check.connect_toggled(move |button| {
+        if button.is_active() {
+            selected.borrow_mut().insert(url.clone());
+        } else {
+            selected.borrow_mut().remove(&url);
+        }
+    });
+    check_slot.append(&check);
+    row.append(&check_slot);
+
+    let mirror_cell = gtk4::Box::new(gtk4::Orientation::Horizontal, 8);
+    mirror_cell.set_hexpand(true);
+    mirror_cell.set_valign(gtk4::Align::Center);
+
+    let host = gtk4::Label::builder()
+        .label(mirror_display_name(&mirror.url))
+        .xalign(0.0)
+        .hexpand(true)
+        .ellipsize(gtk4::pango::EllipsizeMode::End)
+        .css_classes(["mirror-host"])
+        .build();
+    mirror_cell.append(&host);
+
+    let protocol = gtk4::Label::builder()
+        .label(mirror.protocol.to_uppercase())
+        .valign(gtk4::Align::Center)
+        .css_classes(["mirror-protocol-badge"])
+        .build();
+    mirror_cell.append(&protocol);
+    row.append(&mirror_cell);
+
+    let location_cell = gtk4::Box::new(gtk4::Orientation::Horizontal, 8);
+    location_cell.set_width_request(210);
+    location_cell.set_valign(gtk4::Align::Center);
+
+    let flag = gtk4::Label::builder()
+        .label(country_flag(&mirror.country_code))
+        .valign(gtk4::Align::Center)
+        .css_classes(["mirror-flag"])
+        .build();
+    location_cell.append(&flag);
+
+    let country_text = if mirror.country.is_empty() {
+        String::from("Pays inconnu")
+    } else if mirror.country_code.is_empty() {
+        mirror.country.clone()
+    } else {
+        format!("{} ({})", mirror.country, mirror.country_code)
+    };
+    let country = gtk4::Label::builder()
+        .label(&country_text)
+        .xalign(0.0)
+        .ellipsize(gtk4::pango::EllipsizeMode::End)
+        .css_classes(["mirror-country"])
+        .build();
+    location_cell.append(&country);
+    row.append(&location_cell);
+
+    let speed_cell = gtk4::Box::builder()
+        .width_request(125)
+        .halign(gtk4::Align::End)
+        .valign(gtk4::Align::Center)
+        .build();
+    let speed = gtk4::Label::builder()
+        .label(format_rate(mirror.rate_kib_s))
+        .halign(gtk4::Align::End)
+        .css_classes(["mirror-speed-pill", speed_class(mirror.rate_kib_s)])
+        .build();
+    speed_cell.append(&speed);
+    row.append(&speed_cell);
+
+    row
+}
+
+fn speed_class(rate_kib_s: f64) -> &'static str {
+    if rate_kib_s >= 20.0 * 1024.0 {
+        "mirror-speed-fast"
+    } else if rate_kib_s >= 5.0 * 1024.0 {
+        "mirror-speed-medium"
+    } else {
+        "mirror-speed-slow"
+    }
+}
+
+fn country_flag(code: &str) -> String {
+    let code = code.trim().to_ascii_uppercase();
+    let mut chars = code.chars();
+    let (Some(first), Some(second), None) = (chars.next(), chars.next(), chars.next()) else {
+        return String::from("🌐");
+    };
+    if !first.is_ascii_alphabetic() || !second.is_ascii_alphabetic() {
+        return String::from("🌐");
+    }
+
+    let flag_char = |value: char| {
+        char::from_u32(0x1F1E6 + (value as u32 - 'A' as u32)).unwrap_or('🌐')
+    };
+    format!("{}{}", flag_char(first), flag_char(second))
 }
 
 fn format_cache_size(bytes: u64) -> String {
