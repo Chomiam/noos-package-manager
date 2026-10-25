@@ -662,7 +662,7 @@ pub fn sync_self_installed_binaries() {
             .lines()
             .map(|line| {
                 if line.starts_with("Exec=") {
-                    "Exec=noos-package-manager"
+                    "Exec=/usr/bin/noos-package-manager"
                 } else {
                     line
                 }
