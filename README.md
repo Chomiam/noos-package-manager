@@ -157,7 +157,7 @@ Les préférences sont conservées dans
 - **SBOM SPDX 2.3** attaché à chaque release.
 - Sommes **BLAKE2b** dans le PKGBUILD de l'AUR et **SHA-256** pour les artefacts.
 - Vérifications **namcap**, **checksec**, `cargo audit` et `cargo auditable`.
-- Actions GitHub épinglées par SHA, Dependabot et **OpenSSF Scorecard**.
+- Actions GitHub épinglées (SHA, sauf le générateur SLSA référencé par tag), Dependabot et **OpenSSF Scorecard**.
 
 Les commandes de vérification (provenance, sommes, SBOM) sont détaillées dans
 [SECURITY.md](SECURITY.md).

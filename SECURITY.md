@@ -149,6 +149,6 @@ Pour maximiser le score OpenSSF Scorecard :
 
 - protéger la branche `main` (pull request obligatoire, checks CI requis,
   interdiction du force-push) ;
-- conserver les actions GitHub épinglées par SHA (fait dans les workflows) ;
+- conserver les actions GitHub épinglées par SHA, sauf le générateur SLSA qui doit rester référencé par tag ;
 - activer Dependabot pour Cargo et GitHub Actions (`.github/dependabot.yml`) ;
 - examiner les alertes Code Scanning générées par Scorecard.
