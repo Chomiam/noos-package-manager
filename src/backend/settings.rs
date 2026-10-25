@@ -28,9 +28,6 @@ pub struct YaySettings {
     /// Utilise un répertoire de build dans un tmpfs (`BUILDDIR`).
     #[serde(default)]
     pub compile_in_ram: bool,
-    /// Affiche la fenêtre de gestion des prompts de build Yay.
-    #[serde(default = "default_true")]
-    pub interactive_build_options: bool,
 }
 
 impl Default for YaySettings {
@@ -39,7 +36,6 @@ impl Default for YaySettings {
             multicore: true,
             disable_compression: false,
             compile_in_ram: false,
-            interactive_build_options: true,
         }
     }
 }
@@ -139,7 +135,13 @@ mod tests {
         assert!(settings.yay.multicore);
         assert!(!settings.yay.disable_compression);
         assert!(!settings.yay.compile_in_ram);
-        assert!(settings.yay.interactive_build_options);
+    }
+
+    #[test]
+    fn obsolete_interactive_setting_is_ignored() {
+        let settings: AppSettings =
+            serde_json::from_str(r#"{"yay":{"interactive_build_options":false}}"#).unwrap();
+        assert!(settings.yay.multicore);
     }
 
     #[test]
@@ -148,6 +150,5 @@ mod tests {
             serde_json::from_str(r#"{"yay":{"disable_compression":true}}"#).unwrap();
         assert!(settings.yay.multicore);
         assert!(settings.yay.disable_compression);
-        assert!(settings.yay.interactive_build_options);
     }
 }

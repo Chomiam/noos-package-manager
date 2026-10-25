@@ -16,7 +16,6 @@ pub struct YayBuildEnv {
     multicore: bool,
     disable_compression: bool,
     ram_dir: Option<TempDir>,
-    interactive_build_options: bool,
 }
 
 impl YayBuildEnv {
@@ -40,12 +39,7 @@ impl YayBuildEnv {
             multicore: settings.multicore,
             disable_compression: settings.disable_compression,
             ram_dir,
-            interactive_build_options: settings.interactive_build_options,
         })
-    }
-
-    pub fn interactive_build_options(&self) -> bool {
-        self.interactive_build_options
     }
 
     pub fn env_pairs(&self) -> Vec<(String, String)> {
@@ -95,7 +89,6 @@ mod tests {
             multicore,
             disable_compression: compression,
             compile_in_ram: false,
-            interactive_build_options: true,
         }
     }
 

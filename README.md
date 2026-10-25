@@ -144,8 +144,8 @@ La page **Paramètres** permet de régler l'application sans quitter l'interface
   défilable, application des meilleurs miroirs ou d'une sélection.
 - **Cache Pacman** : taille utilisée et nettoyage avec `paccache`.
 - **Pacman** : téléchargements parallèles (`ParallelDownloads`, de 1 à 20).
-- **Yay** : compilation multi-cœur, compression des paquets, compilation en RAM
-  et interception des options de build.
+- **Yay** : compilation multi-cœur, compression des paquets et compilation en
+  RAM. Les options de build PKGBUILD sont toujours interceptées.
 - **Services système** : détection et redémarrage des services utilisant
   d'anciennes bibliothèques après une mise à jour.
 

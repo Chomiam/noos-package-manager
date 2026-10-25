@@ -792,9 +792,7 @@ pub(crate) async fn run_yay_transaction_streaming(
         })
         .await;
 
-    let interactive = transaction.interactive
-        && build_env.interactive_build_options()
-        && !elevation.wraps_with_systemd_run();
+    let interactive = transaction.interactive && !elevation.wraps_with_systemd_run();
     let pacman_wrapper = if interactive {
         Some(PacmanNoconfirmWrapper::new()?)
     } else {
