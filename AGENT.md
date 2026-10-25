@@ -234,15 +234,24 @@ vaut 5/10, Silver 7/10, Gold 10/10. Ne pas mettre de faux badge dans le README.
 ### Branch-Protection (-1/10, erreur interne)
 
 La protection de `main` est active (PR, check CI, `enforce_admins`, pas de
-force-push). Scorecard ne peut pas la lire avec le jeton GitHub par défaut
-(fine-grained). Créer un **PAT classique** avec le scope `repo`, puis :
+force-push). Scorecard ne peut pas la lire avec le jeton GitHub par défaut.
+Créer un **fine-grained PAT** sur
+<https://github.com/settings/personal-access-tokens/new> avec :
+
+- accès limité au dépôt `Chomiam/noos-package-manager` ;
+- permission **Administration: Read-only** (Metadata est ajouté
+  automatiquement) ;
+- expiration à un an maximum.
+
+Puis :
 
 ```bash
 gh secret set SCORECARD_TOKEN --repo Chomiam/noos-package-manager
 ```
 
 `scorecard.yml` utilise `secrets.SCORECARD_TOKEN` en priorité. Le check pourra
-alors évaluer la protection (souvent 7-9/10).
+alors évaluer la protection (souvent 7-9/10). Ne pas utiliser un PAT classique
+avec le scope `repo` : plus large et déconseillé par OpenSSF.
 
 ### Pinned-Dependencies (7/10)
 
