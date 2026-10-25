@@ -63,6 +63,23 @@ La provenance est générée par le workflow officiel
 sur un runner GitHub hébergé, à partir du commit tagué. Elle atteste le workflow,
 le dépôt, le tag et les empreintes des artefacts.
 
+### Signatures cosign
+
+Les assets signés par le workflow `sign-release.yml` possèdent un bundle
+`.sigstore.json` (signature keyless Sigstore). Exemple pour v0.1.13 :
+
+```bash
+cosign verify-blob \
+  --bundle noos-package-manager-0.1.13-1-x86_64.pkg.tar.zst.sigstore.json \
+  --certificate-identity-regexp \
+    'https://github.com/Chomiam/noos-package-manager/.github/workflows/sign-release.yml@refs/heads/main' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  noos-package-manager-0.1.13-1-x86_64.pkg.tar.zst
+```
+
+La signature est liée au workflow GitHub et au tag ; elle ne remplace pas la
+provenance SLSA, elle la complète.
+
 ### Vérification des sommes
 
 ```bash

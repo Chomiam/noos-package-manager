@@ -1,0 +1,28 @@
+[package]
+name = "noos-package-manager-fuzz"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+noos-package-manager = { path = ".." }
+
+[[bin]]
+name = "aur_rpc_json"
+path = "fuzz_targets/aur_rpc_json.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "pacman_ss"
+path = "fuzz_targets/pacman_ss.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]

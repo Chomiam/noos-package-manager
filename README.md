@@ -156,7 +156,7 @@ Les préférences sont conservées dans
 - **Provenance SLSA Build L3** vérifiable avec `slsa-verifier`.
 - **SBOM SPDX 2.3** attaché à chaque release.
 - Sommes **BLAKE2b** dans le PKGBUILD de l'AUR et **SHA-256** pour les artefacts.
-- Vérifications **namcap**, **checksec**, `cargo audit` et `cargo auditable`.
+- Vérifications **namcap**, **checksec**, `cargo audit`, `cargo auditable`, **CodeQL** et **fuzzing** `cargo-fuzz`.
 - Actions GitHub épinglées (SHA, sauf le générateur SLSA référencé par tag), Dependabot et **OpenSSF Scorecard**.
 
 Les commandes de vérification (provenance, sommes, SBOM) sont détaillées dans
