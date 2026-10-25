@@ -29,7 +29,7 @@ makedepends=(
 )
 source=("$pkgname-$pkgver.tar.gz::https://github.com/Chomiam/noos-package-manager/archive/refs/tags/v$pkgver.tar.gz")
 # Rempli après la création du tag (somme BLAKE2b du tarball source).
-b2sums=('SKIP')
+b2sums=('e333fd3cc877ab5416a394a15e0d8324e12f5e1ca83c88e730a75a7d285bb69e2ebb5510a85afa6d1a8e37abf0f0e6676949377a8ab65de8829859357072e519')
 
 prepare() {
   cd "$pkgname-$pkgver"
