@@ -93,8 +93,8 @@ de version.
 
 - Pull request obligatoire, check CI requis, force-push et suppression
   interdits, résolution des conversations requise.
-- `enforce_admins` est désactivé : un administrateur peut encore pousser
-  directement, mais la voie recommandée reste la PR.
+- `enforce_admins` est **activé** : même un administrateur doit passer par une
+  pull request et les checks requis. Les tags restent poussables directement.
 - Environnement `aur` : secret `AUR_SSH_PRIVATE_KEY`, restreint aux tags `v*`.
 - Une clé SSH dédiée à la CI est générée ; sa clé publique et la procédure
   d'activation sont dans [`SECURITY.md`](SECURITY.md#publication-aur).
@@ -123,8 +123,9 @@ de version.
      "https://github.com/Chomiam/noos-package-manager/archive/refs/tags/vX.Y.Z.tar.gz"
    b2sum source.tar.gz
    ```
-8. Remplacer `b2sums=('SKIP')` et la valeur dans `.SRCINFO`, committer et
-   pousser sur `main` (commit `chore(aur): update b2sums for vX.Y.Z`).
+8. Remplacer `b2sums=('SKIP')` et la valeur dans `.SRCINFO`, puis ouvrir une
+   pull request vers `main` (la branche est protégée, même pour les admins).
+   Attendre le check CI et merger avant de créer la release.
 9. Créer la release GitHub publiée :
    ```bash
    gh release create vX.Y.Z --title "..." --notes-file ...
@@ -174,6 +175,81 @@ de version.
   locales.
 - **Ne pas installer de version locale.** Pour tester une version de
   développement, lancer directement le binaire `target/release`.
+
+## Score OpenSSF et actions
+
+### Code-Review (0/10)
+
+Le check exige des **pull requests approuvées par un reviewer**. Un mainteneur
+seul ne peut pas approuver sa propre PR. Pour progresser :
+
+1. inviter un collaborateur de confiance dans **Settings → Collaborators** ;
+2. exiger au moins une approbation dans la protection de `main`
+   (`required_approving_review_count: 1`) ;
+3. faire approuver les PR par ce reviewer.
+
+`CODEOWNERS` et `.github/PULL_REQUEST_TEMPLATE.md` sont déjà en place. Ne jamais
+utiliser un bot ou un faux compte pour approuver : ce serait du contournement.
+
+### Signed-Releases (6/10 → 9/10)
+
+Le check regarde les **5 dernières releases avec assets** :
+
+- v0.1.14 et v0.1.15 ont une provenance SLSA (`*.intoto.jsonl`) ;
+- v0.1.13 n'avait ni signature ni provenance.
+
+Le workflow `sign-release.yml` signe les assets d'une release existante avec
+**cosign keyless** et ajoute des bundles `*.sigstore.json`. Pour signer v0.1.13 :
+
+```bash
+gh workflow run sign-release.yml -f tag=v0.1.13
+```
+
+La note monte à **9/10** (v0.1.13 signé à 8, v0.1.14/15 à 10). Pour atteindre
+10/10 sans fabriquer de provenance, il faudrait que v0.1.13 sorte de la fenêtre
+des 5 dernières releases, ou reconstruire ses assets avec provenance — ce qui
+réécrirait une release publiée. Ne pas falsifier de provenance.
+
+### SAST (0/10 → 7/10 puis 10/10)
+
+`.github/workflows/codeql.yml` utilise `github/codeql-action/analyze` avec
+**CodeQL pour Rust** en `build-mode: none`. Scorecard détecte le workflow
+(7/10) puis compte les check runs sur les PR mergées (10/10).
+
+Ne pas ajouter un linter sans rapport (Hadolint, etc.) uniquement pour le score.
+
+### Fuzzing (0/10 → 10/10)
+
+Le dossier `fuzz/` contient deux cibles `cargo-fuzz` qui importent
+`libfuzzer_sys` (`aur_rpc_json`, `pacman_ss`). Scorecard détecte ce motif dans
+les sources et attribue 10/10. Voir `fuzz/README.md` pour lancer les fuzzers.
+
+### CII-Best-Practices (0/10 → 5/10 minimum)
+
+Le check interroge `bestpractices.dev` à partir de l'URL du dépôt. Il faut
+**créer le projet et obtenir le badge** : voir
+[`docs/CII-BEST-PRACTICES.md`](docs/CII-BEST-PRACTICES.md). Un badge Passing
+vaut 5/10, Silver 7/10, Gold 10/10. Ne pas mettre de faux badge dans le README.
+
+### Branch-Protection (-1/10, erreur interne)
+
+La protection de `main` est active (PR, check CI, `enforce_admins`, pas de
+force-push). Scorecard ne peut pas la lire avec le jeton GitHub par défaut
+(fine-grained). Créer un **PAT classique** avec le scope `repo`, puis :
+
+```bash
+gh secret set SCORECARD_TOKEN --repo Chomiam/noos-package-manager
+```
+
+`scorecard.yml` utilise `secrets.SCORECARD_TOKEN` en priorité. Le check pourra
+alors évaluer la protection (souvent 7-9/10).
+
+### Pinned-Dependencies (7/10)
+
+Les actions sont épinglées par SHA, sauf le générateur SLSA
+(`slsa-github-generator@v2.1.0`) qui **doit** être référencé par un tag pour
+télécharger son builder. Cette exception est documentée ; ne pas la remplacer
+par un SHA, sinon la provenance SLSA échoue.
 
 ## Dépannage
 

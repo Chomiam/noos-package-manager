@@ -30,6 +30,11 @@ jobs:
           results_file: results.sarif
           results_format: sarif
           publish_results: true
+          # Jeton classique avec le scope `repo` : nécessaire pour lire les
+          # règles de protection de branche classiques. Si le secret est absent,
+          # on retombe sur le jeton GitHub par défaut (le check peut alors
+          # renvoyer une erreur interne, sans impact sur les autres checks).
+          repo_token: ${{ secrets.SCORECARD_TOKEN || github.token }}
 
       - name: Archiver le rapport SARIF
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
