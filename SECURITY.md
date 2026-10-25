@@ -119,9 +119,29 @@ n'appelle pas les variantes `__*_chk` de la libc, donc `fortify_source` reste
 ### Publication AUR
 
 La publication AUR est effectuée par GitHub Actions après validation du tag et
-de la somme BLAKE2b. Elle utilise une clé SSH dédiée stockée dans le secret
-`AUR_SSH_PRIVATE_KEY` et l'environnement GitHub `aur`. La clé doit être limitée
-au compte AUR du mainteneur et être régulièrement renouvelée.
+de la somme BLAKE2b. Elle utilise le secret d'environnement
+`AUR_SSH_PRIVATE_KEY`, restreint aux tags `v*` par la politique de déploiement
+de l'environnement GitHub `aur`.
+
+Une clé SSH dédiée à la CI a été générée pour remplacer la clé personnelle du
+mainteneur. Pour l'activer :
+
+1. Ajouter la clé publique suivante au compte AUR
+   (My Account → SSH Keys) :
+
+```text
+ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDDxsRZnjYTZqp6fq1xe6QVV/1n5p0W59GZoakk1EDx7 noos-package-manager CI
+```
+
+2. Remplacer le secret GitHub :
+
+```bash
+gh secret set AUR_SSH_PRIVATE_KEY --env aur \
+  --repo Chomiam/noos-package-manager < ~/.ssh/aur-noos-ci
+```
+
+Tant que cette activation n'est pas terminée, la clé personnelle existante est
+utilisée ; la restriction de l'environnement aux tags `v*` limite son exposition.
 
 ## Recommandations pour le dépôt
 
