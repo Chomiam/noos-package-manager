@@ -38,7 +38,6 @@ pub struct SettingsView {
     multicore_switch: adw::SwitchRow,
     compression_switch: adw::SwitchRow,
     ram_switch: adw::SwitchRow,
-    interactive_switch: adw::SwitchRow,
     cmd_tx: Sender<BackendCommand>,
 }
 
@@ -208,16 +207,9 @@ impl SettingsView {
             .subtitle("BUILDDIR dans un tmpfs · consomme de la mémoire")
             .active(yay_settings.compile_in_ram)
             .build();
-        let interactive_switch = adw::SwitchRow::builder()
-            .title("Intercepter les choix de build")
-            .subtitle("Affiche les options du PKGBUILD et les fournisseurs dans une fenêtre")
-            .active(yay_settings.interactive_build_options)
-            .build();
-
         yay_group.add(&multicore_switch);
         yay_group.add(&compression_switch);
         yay_group.add(&ram_switch);
-        yay_group.add(&interactive_switch);
         root.add(&yay_group);
 
         let services_group = adw::PreferencesGroup::builder()
@@ -264,7 +256,6 @@ impl SettingsView {
             multicore_switch,
             compression_switch,
             ram_switch,
-            interactive_switch,
             cmd_tx: cmd_tx.clone(),
         };
 
@@ -351,12 +342,6 @@ impl SettingsView {
                 save_yay_setting(|yay| yay.compile_in_ram = row.is_active());
             });
         }
-        {
-            self.interactive_switch.connect_active_notify(move |row| {
-                save_yay_setting(|yay| yay.interactive_build_options = row.is_active());
-            });
-        }
-
         {
             let cmd_tx = self.cmd_tx.clone();
             self.check_services_button.connect_clicked(move |button| {
