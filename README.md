@@ -88,6 +88,8 @@ durcissement. Les détails et les commandes de vérification sont dans
 
 ## Installation
 
+**Paquet AUR :** [aur.archlinux.org/packages/noos-package-manager](https://aur.archlinux.org/packages/noos-package-manager)
+
 ### Depuis l'AUR (recommandé)
 
 ```bash
