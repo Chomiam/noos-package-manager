@@ -1,134 +1,112 @@
-# Noos Package Manager
+<p align="center">
+  <img src="assets/noos-logo.svg" width="420" alt="Noos Package Manager">
+</p>
 
-**Noos Package Manager** est un gestionnaire de paquets graphique moderne et unifié pour **Arch Linux**, écrit intégralement en **Rust** avec **GTK4** et **libAdapta**.
+<h1 align="center">Noos Package Manager</h1>
 
-Il réunit au sein d'une seule interface fluide (compatible avec les thèmes GNOME et WhiteSur) les **dépôts officiels Pacman**, l'**Arch User Repository (AUR RPC v5 + `yay`)**, les applications **Flatpak / Flathub** ainsi que la gestion locale complète des **AppImages**, et inclut l'outil en ligne de commande **`noos-up`** propulsé par **Ratatui**.
+<p align="center">
+  <strong>Le gestionnaire de paquets tout-en-un pour Arch Linux.</strong><br>
+  Pacman, AUR, Flatpak et AppImages réunis dans une interface moderne, rapide et sécurisée.
+</p>
 
-[![CI](https://github.com/Chomiam/noos-package-manager/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Chomiam/noos-package-manager/actions/workflows/ci.yml)
-[![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/Chomiam/noos-package-manager/badge)](https://scorecard.dev/viewer/?uri=github.com/Chomiam/noos-package-manager)
-[![AUR](https://img.shields.io/aur/version/noos-package-manager)](https://aur.archlinux.org/packages/noos-package-manager)
-[![Release](https://img.shields.io/github/v/release/Chomiam/noos-package-manager?display_name=tag)](https://github.com/Chomiam/noos-package-manager/releases)
-[![License](https://img.shields.io/github/license/Chomiam/noos-package-manager)](LICENSE)
-[![SLSA Build L3](https://img.shields.io/badge/SLSA-Build%20L3-4c1)](SECURITY.md)
+<p align="center">
+  <a href="https://github.com/Chomiam/noos-package-manager/actions/workflows/ci.yml"><img src="https://github.com/Chomiam/noos-package-manager/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
+  <a href="https://scorecard.dev/viewer/?uri=github.com/Chomiam/noos-package-manager"><img src="https://api.securityscorecards.dev/projects/github.com/Chomiam/noos-package-manager/badge" alt="OpenSSF Scorecard"></a>
+  <a href="https://aur.archlinux.org/packages/noos-package-manager"><img src="https://img.shields.io/aur/version/noos-package-manager" alt="AUR"></a>
+  <a href="https://github.com/Chomiam/noos-package-manager/releases"><img src="https://img.shields.io/github/v/release/Chomiam/noos-package-manager?display_name=tag" alt="Release"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/Chomiam/noos-package-manager" alt="Licence"></a>
+  <a href="SECURITY.md"><img src="https://img.shields.io/badge/SLSA-Build%20L3-4c1" alt="SLSA Build L3"></a>
+</p>
 
 ---
 
-## Aperçu Visuel (Captures d'écran)
+## Une seule application pour tout votre système
 
-### 1. Recommandations Pacman par catégories & Logos natifs
+Fini les allers-retours entre le terminal, les dépôts officiels et les outils AUR.
+**Noos Package Manager** rassemble tout ce qui fait vivre votre Arch Linux dans une
+interface unique, cohérente et agréable à utiliser :
+
+- **Pacman** — paquets officiels, recommandations par catégories, logos natifs et
+  réparation assistée des verrous de base de données.
+- **AUR** — recherche, votes, popularité, mainteneurs, versions antérieures et
+  installation directe via `yay`.
+- **Flatpak / Flathub** — applications sandboxées, runtimes et mises à jour.
+- **AppImages** — glisser-déposer, icônes, raccourcis du menu Démarrer et mises à
+  jour GitHub.
+
+## Ce qui fait la différence
+
+### Tout au même endroit
+Une seule liste, une seule recherche, un seul bouton **Installer** pour Pacman,
+AUR, Flatpak et AppImages. Les mises à jour sont regroupées et traitées ensemble.
+
+### AUR sans mauvaise surprise
+Lorsqu'un PKGBUILD propose des variantes (GTK3 ou GTK4, plusieurs bibliothèques,
+options de compilation), Noos Package Manager affiche une fenêtre claire avec
+**une seule case à cocher par choix**. Les menus Yay de diff, d'édition ou de
+confirmation sont neutralisés : vous ne voyez que les vraies options du paquet.
+
+### Une interface qui vous ressemble
+GTK4 et **libAdapta** pour une interface fluide, des thèmes clairs et sombres,
+des icônes d'applications natives et un rendu soigné sur GNOME comme sur les
+bureaux tiers.
+
+### Des mises à jour sans effort
+Un bouton **Tout mettre à jour** couvre Pacman, AUR, Flatpak et AppImages.
+La CLI **`noos-up`** fait la même chose depuis un terminal, avec une interface
+Ratatui colorée, une progression en direct et une seule authentification.
+
+### La sécurité au sérieux
+Chaque release est construite et contrôlée automatiquement : provenance
+**SLSA Build L3**, **SBOM SPDX**, sommes **BLAKE2b** et vérifications de
+durcissement. Les détails et les commandes de vérification sont dans
+[SECURITY.md](SECURITY.md).
+
+### Des détails qui comptent
+- Cache local instantané et actualisation différentielle en arrière-plan.
+- Notifications et journal interne pour retrouver chaque opération.
+- Fiches détaillées avec README, liens officiels et métadonnées complètes.
+- Mises à jour ignorées, historique des versions AUR et redémarrage des services
+  après une mise à jour système.
+
+## Aperçu
+
+### Recommandations Pacman par catégories
 ![Recommandations Pacman](assets/screenshots/pacman-recommendations.png)
 
-### 2. Catalogue AUR en colonnes alignées & Tri dynamique
-![Catalogue AUR en colonnes](assets/screenshots/aur-columns.png)
+### Catalogue AUR en colonnes
+![Catalogue AUR](assets/screenshots/aur-columns.png)
 
-### 3. Intégration Flatpak & Recommandations Flathub
-![Recommandations Flatpak Flathub](assets/screenshots/flatpak-flathub.png)
+### Flatpak et Flathub
+![Flatpak Flathub](assets/screenshots/flatpak-flathub.png)
 
-### 4. Gestionnaire d'AppImages avec Glisser-Déposer (`~/Applications` + Menu Démarrer)
-![Gestion des AppImages](assets/screenshots/appimages-drag-drop.png)
+### AppImages par glisser-déposer
+![AppImages](assets/screenshots/appimages-drag-drop.png)
 
-### 5. Vue d'ensemble unifiée
-![Vue d'ensemble Noos Package Manager](assets/screenshots/overview.png)
-
----
-
-## Fonctionnalités Principales
-
-### Dépôts officiels Pacman (`pacman` & `checkupdates`)
-- Recommandations organisées par catégories (*Navigateurs & Internet*, *Multimédia, Audio & Création*, *Bureautique & Productivité*, *Développement & Programmation*, *Jeux & Gaming*, *Système & Utilitaires*) avec les paquets non installés présentés en priorité.
-- Résolution automatique des logos d'applications (WhiteSur, hicolor, breeze, Flathub appstream, `.desktop`).
-- Réparation automatique du verrou de base de données Pacman (`/var/lib/pacman/db.lck`) via Polkit.
-
-### Arch User Repository — AUR (`RPC v5` + `yay`)
-- Affichage tabulaire aligné en colonnes : **Votes (`★`)**, **Popularité**, **Mainteneur** (avec détection des paquets orphelins), **Date de dernière mise à jour**, **Version** et badge d'alerte **Obsolète (`Out-of-Date`)**.
-- Sélecteur de tri dédié dans l'onglet AUR : *Popularité (par défaut)*, *Votes*, *Mis à jour récemment* et *Nom (A → Z)*.
-- Découverte paginée par vagues thématiques (wayland, hyprland, browser, vulkan, nvidia, gaming, etc.).
-- **Historique des versions** : un clic sur la version d'un paquet AUR ouvre la liste des versions précédentes extraites de l'historique git, avec installation directe de la version choisie (`yay -Bi`).
-- **Choix de build interactif** : les menus de fournisseurs (GTK3/GTK4, bibliothèques, etc.) et les questions des PKGBUILD s'affichent dans une fenêtre GTK dédiée ; Pacman reste non interactif pendant la transaction.
-
-### Flatpak & Flathub (`flatpak` + API Flathub v2)
-- Recommandations Flathub par catégories combinant le cache local AppStream et l'API Flathub v2.
-- Résolution automatique des moteurs d'exécution (*Runtimes* `org.freedesktop.Platform`, `org.gnome.Platform`, etc.) et des tailles de téléchargement.
-
-### Gestion locale des AppImages (Glisser-Déposer)
-- Zone de **Glisser-Déposer (Drag & Drop)** dans l'onglet *AppImages* : déplace automatiquement les fichiers `.AppImage` dans `~/Applications` (créé automatiquement), applique la permission d'exécution (`chmod +x`), extrait l'icône embarquée et crée le raccourci `.desktop` dans le menu démarrer (`~/.local/share/applications`).
-- Vérification et installation des mises à jour d'AppImages via **GitHub Releases** et suppression propre (binaire + raccourci du menu démarrer).
-
-### Sélection multiple, Dépendances optionnelles & Gestionnaire d'installation temps réel
-- Cases à cocher permettant de sélectionner plusieurs paquets (Pacman, AUR, Flatpak) et de lancer une installation groupée via le bouton **`Installer (N)`**.
-- **Fenêtre contextuelle de dépendances optionnelles (`Optional Deps` Pacman & `OptDepends` AUR)** : lors de l'installation d'un paquet possédant des dépendances optionnelles non installées, une fenêtre permet de cocher à la carte les fonctionnalités et paquets complémentaires souhaités avant de lancer la transaction.
-- **Gestionnaire d'installation** dédié affichant la résolution des dépendances, la taille totale de téléchargement, la barre de progression en direct, l'état individuel de chaque dépendance, les journaux console, un bouton **Annuler l'installation** avec confirmation, ainsi qu'une alerte de sécurité si l'utilisateur tente de fermer l'application pendant une transaction.
-
-### Mises à jour globales unifiées, Cache local & Auto-redémarrage
-- **Cache local instantané & Différentiel incrémental** : démarrage immédiat depuis `~/.cache/noos-package-manager/catalog_cache_v1.json`, calcul uniquement des différences locales (`pacman -Q` / `-Qqe` / `-Qqm`) et actualisation asynchrone des mises à jour en arrière-plan.
-- Vérification simultanée et affichage par sections dédiées (**Pacman**, **AUR**, **Flatpak**, **AppImages**) des mises à jour disponibles (`checkupdates`, `yay -Qua`, `flatpak remote-ls --updates`, GitHub Releases).
-- Détection automatique des mises à jour de `noos-package-manager` lui-même sur l'AUR avec synchronisation atomique des binaires et **redémarrage automatique** de l'application une fois sa mise à jour appliquée.
-- **Mises à jour ignorées** : bouton pour ignorer un paquet dans l'onglet Mises à jour, liste dédiée des paquets ignorés et réactivation à la demande. La sélection est conservée dans `~/.config/noos-package-manager/settings.json` et exclue de « Tout mettre à jour ».
-- **Services à redémarrer** : après une transaction Pacman/AUR, `needrestart -b` détecte les services utilisant d'anciennes bibliothèques. L'application propose de les redémarrer, liste les échecs avec leur statut et conseille un redémarrage complet si le noyau a été mis à jour.
-
-### Paramètres intégrés (volet gauche)
-- **Miroirs Pacman via Reflector** : analyse des miroirs récents, mesure du débit, tri par vitesse, tableau de 10 lignes défilable, application des 5 meilleurs ou d'une sélection manuelle dans `/etc/pacman.d/mirrorlist`.
-- **Cache Pacman** : affichage de l'espace utilisé par `/var/cache/pacman/pkg` et nettoyage avec `paccache -r` (les 3 dernières versions de chaque paquet sont conservées).
-- **Pacman** : réglage de `ParallelDownloads` (1 à 20) directement dans `/etc/pacman.conf`, avec sauvegarde et vérification par `pacman-conf`.
-- **Yay** : compilation multi-cœur (`MAKEFLAGS`), désactivation de la compression (`PKGEXT`), compilation en RAM (`BUILDDIR`) et interception des choix de build, appliqués par variables d'environnement à chaque transaction AUR.
-
-### Commande CLI `noos-up` (Ratatui)
-- Utilitaire en ligne de commande avec interface **Ratatui** (`Viewport::Inline`) permettant de vérifier (`noos-up --check`) et d'appliquer (`noos-up`) en une seule commande toutes les mises à jour **Pacman**, **Yay (AUR)** et **Flatpak** avec badges colorés, barre de progression et flux temps réel.
-- Mode non-TTY avec fallback textuel pour l'exécution dans des scripts ou via SSH.
-- Élévation de privilèges **unique par opération** : `sudo` est validé une seule fois via un assistant `askpass` graphique intégré (aucun mot de passe n'est stocké sur disque), puis réutilisé pour toutes les commandes Pacman et AUR de l'installation ou de la mise à jour. Les transactions mixtes Pacman + AUR sont exécutées en une seule commande `yay --sudoloop`. Repli automatique sur `pkexec` (Polkit) si `sudo` est absent.
-
-### Fiches détaillées & README intégrés
-- Bouton d'information `ℹ` sur chaque paquet ouvrant une fenêtre contextuelle avec métadonnées complètes, liens directs vers le **Site officiel** et **GitHub**, et rendu natif du **README** (GitHub / GitLab / Flathub / documentation locale).
-
-### Notifications & Logging
-- **Cloche de notification** dans la barre supérieure : affiche un historique des erreurs, des succès d'installation et des mises à jour terminées. Un badge indique le nombre de notifications non lues.
-- **Journal interne** (`~/.cache/noos-package-manager/noos.log`) : consigne toutes les opérations et erreurs pour le débogage.
-
----
+### Vue d'ensemble
+![Vue d'ensemble](assets/screenshots/overview.png)
 
 ## Installation
 
-### Depuis l'AUR (Arch Linux)
+### Depuis l'AUR (recommandé)
 
-Avec `yay` :
 ```bash
 yay -S noos-package-manager
 ```
 
-Manuellement avec `makepkg` :
-```bash
-git clone https://aur.archlinux.org/noos-package-manager.git
-cd noos-package-manager
-makepkg -si
-```
+Noos Package Manager est distribué comme paquet source : `yay` récupère les
+sources, construit l'application et installe `libadapta` si nécessaire.
 
-### Utilisation en ligne de commande (`noos-up`)
+### Depuis les sources
 
-Mettre à jour tous les paquets **Pacman**, **Yay (AUR)** et **Flatpak** avec l'interface CLI stylisée **Ratatui** :
-```bash
-noos-up
-```
+Prérequis (Arch Linux) :
 
-Vérifier uniquement les mises à jour disponibles sans les installer :
-```bash
-noos-up --check
-```
-
-Afficher l'aide :
-```bash
-noos-up --help
-```
-
-### Compilation depuis les sources
-
-#### Prérequis système (Arch Linux)
 ```bash
 yay -S --needed rust cargo gtk4 libadapta pacman-contrib flatpak polkit sudo reflector git
 ```
 
-`needrestart` (détection des services à redémarrer) est disponible dans l'AUR / chaotic-aur ; il est déclaré comme dépendance du paquet AUR.
+Puis :
 
-#### Compilation et exécution
 ```bash
 git clone https://github.com/Chomiam/noos-package-manager.git
 cd noos-package-manager
@@ -136,85 +114,58 @@ cargo build --release
 ./target/release/noos-package-manager
 ```
 
----
-
-## Tests & Qualité du Code
-
-Le projet respecte des règles strictes d'ingénierie Rust (aucun blocage du thread principal GTK4, gestion d'erreurs typée avec `thiserror`, zéro avertissement Clippy) :
+L'outil en ligne de commande est disponible dans le même dépôt :
 
 ```bash
-cargo test --frozen --all-features
-cargo clippy --all-targets -- -D warnings
-cargo audit --deny warnings
+noos-up          # vérifie et applique toutes les mises à jour
+noos-up --check  # vérifie seulement
 ```
 
-La CI Arch Linux vérifie également `namcap` (PKGBUILD et paquet), `checksec`
-(Full RELRO, PIE, NX, stack canary) et `cargo audit bin` sur le binaire construit
-avec `cargo-auditable`.
+## Premiers pas
 
-## Sécurité et provenance
+1. Lancez **Noos Package Manager** depuis le menu Démarrer ou avec
+   `noos-package-manager`.
+2. Recherchez un paquet, ou explorez les recommandations par catégories.
+3. Sélectionnez un ou plusieurs paquets, puis cliquez sur **Installer**.
+4. Suivez la progression, les dépendances et les journaux dans le gestionnaire
+   d'installation.
+5. Pour les paquets AUR, choisissez les options du PKGBUILD dans la fenêtre
+   dédiée : une seule case peut être cochée.
+6. Utilisez **Mettre à jour** ou **Tout mettre à jour** pour garder le système à
+   jour.
 
-- **b2sums BLAKE2b-512** dans le `PKGBUILD` de l'AUR, vérifiées par `makepkg`.
-- **Provenance SLSA Build L3** générée par GitHub Actions et vérifiable avec
-  `slsa-verifier` pour les artefacts de release.
-- **SBOM SPDX 2.3** attaché à chaque release (`sbom.spdx.json`), exploitable
-  avec `syft`, `grype` ou `trivy`.
-- **Publication AUR automatisée** après validation de la version et de la somme
-  BLAKE2b du tarball source.
-- **Actions GitHub épinglées par SHA**, image de build Arch épinglée par digest,
-  Dependabot pour Cargo et GitHub Actions, et workflow OpenSSF Scorecard.
-- **Durcissement** : RELRO complet, PIE, NX, stack canary et `FORTIFY_SOURCE=3`
-  pour les dépendances C.
+## Paramètres
+
+La page **Paramètres** permet de régler l'application sans quitter l'interface :
+
+- **Miroirs Pacman (Reflector)** : mesure des débits, tableau de 10 lignes
+  défilable, application des meilleurs miroirs ou d'une sélection.
+- **Cache Pacman** : taille utilisée et nettoyage avec `paccache`.
+- **Pacman** : téléchargements parallèles (`ParallelDownloads`, de 1 à 20).
+- **Yay** : compilation multi-cœur, compression des paquets, compilation en RAM
+  et interception des options de build.
+- **Services système** : détection et redémarrage des services utilisant
+  d'anciennes bibliothèques après une mise à jour.
+
+Les préférences sont conservées dans
+`~/.config/noos-package-manager/settings.json`.
+
+## Sécurité et confiance
+
+- Releases construites par **GitHub Actions** dans un environnement Arch épinglé.
+- **Provenance SLSA Build L3** vérifiable avec `slsa-verifier`.
+- **SBOM SPDX 2.3** attaché à chaque release.
+- Sommes **BLAKE2b** dans le PKGBUILD de l'AUR et **SHA-256** pour les artefacts.
+- Vérifications **namcap**, **checksec**, `cargo audit` et `cargo auditable`.
+- Actions GitHub épinglées par SHA, Dependabot et **OpenSSF Scorecard**.
 
 Les commandes de vérification (provenance, sommes, SBOM) sont détaillées dans
-[SECURITY.md](SECURITY.md#vérifier-une-release).
-
----
-
-## Structure du Projet
-
-```
-src/
-├── main.rs                 # Point d'entrée GTK4/libAdapta
-├── error.rs                # Gestion d'erreurs typée (AppError / AppResult)
-├── backend/
-│   ├── mod.rs              # Déclaration des sous-modules et réexports
-│   ├── models.rs           # Modèles de données (PackageItem, PackageSource, etc.)
-│   ├── logging.rs          # Journal interne (mémoire + fichier)
-│   ├── catalog.rs          # Chargement, rafraîchissement et différentiel du catalogue
-│   ├── install.rs          # Installation, mise à jour, suppression, dépendances optionnelles
-│   ├── search.rs           # Recherche combinée Pacman / AUR / Flatpak / AppImage
-│   ├── pacman.rs           # Interactions avec pacman / checkupdates
-│   ├── elevation.rs        # Session sudo unique + assistant askpass par opération
-│   ├── aur.rs              # Client AUR RPC v5 partagé + intégration yay
-│   ├── aur_versions.rs     # Historique git des versions AUR et installation
-│   ├── needrestart.rs      # Détection/redémarrage des services après mise à jour
-│   ├── reflector.rs        # Analyse et application des miroirs Pacman
-│   ├── settings.rs         # Configuration locale (mises à jour ignorées)
-│   ├── flatpak.rs          # Intégration Flatpak / Flathub
-│   ├── appimage.rs         # Gestion locale des AppImages
-│   ├── details.rs          # Fiches détaillées des paquets
-│   ├── cache.rs            # Cache local différentiel (catalog_cache_v1.json)
-│   └── tests.rs            # Tests unitaires
-└── ui/
-    ├── mod.rs
-    ├── window.rs           # Fenêtre principale (GTK4 / libAdapta)
-    ├── askpass.rs          # Assistant graphique de mot de passe (sudo -A)
-    ├── settings_page.rs    # Page Paramètres (Reflector, cache Pacman)
-    ├── aur_versions_dialog.rs # Fenêtre de choix des versions antérieures AUR
-    ├── sidebar.rs          # Volet latéral
-    ├── row.rs              # Lignes de paquets et colonnes AUR
-    ├── icons.rs            # Résolution des icônes (WhiteSur, hicolor, breeze)
-    ├── style.rs            # CSS de l'application
-    ├── messages.rs         # Messages échangés entre UI et backend
-    ├── install_dialog.rs   # Gestionnaire d'installation et progression
-    └── details_dialog.rs   # Fenêtre de détails d'un paquet
-└── bin/
-    └── noos_up.rs          # Outil CLI Ratatui (noos-up)
-```
-
----
+[SECURITY.md](SECURITY.md).
 
 ## Licence
 
-Distribué sous licence **GPL-3.0-or-later**. Voir le fichier [LICENSE](LICENSE) pour plus de détails.
+Noos Package Manager est un logiciel libre distribué sous **GNU General Public
+License v3.0 ou ultérieure**. Voir [LICENSE](LICENSE).
+
+Le nom, le logo **Noos** et l'identité visuelle de l'application appartiennent à
+leur auteur.
