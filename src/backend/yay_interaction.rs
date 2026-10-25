@@ -438,6 +438,21 @@ async fn process_line(
         send_log(ui_tx, &line).await;
     }
 
+    // Les menus clean/diff/edit de Yay sont déjà répondus par les options
+    // `--answerclean None`, `--answerdiff None` et `--answeredit None`.
+    // Leurs lignes ne sont pas des questions du PKGBUILD.
+    if is_ignored_yay_menu_line(&line) {
+        return Ok(());
+    }
+
+    // Certaines confirmations internes de Yay restent affichées malgré
+    // `--noconfirm` retiré pour les prompts de build. L'utilisateur a déjà
+    // confirmé l'installation dans l'application : on répond directement.
+    if let Some(answer) = auto_answer_for_yay_prompt(&line) {
+        write_pty_answer(writer, answer)?;
+        return Ok(());
+    }
+
     if let Some(prompt) = detect_prompt(&line) {
         ask_and_answer(prompt, writer, ui_tx, cancel_handle).await?;
     }
@@ -468,12 +483,15 @@ async fn ask_and_answer(
         .await;
 
     let answer = request_prompt(ui_tx, cancel_handle, prompt).await?;
+    write_pty_answer(writer, &answer)
+}
+
+fn write_pty_answer(writer: &mut (dyn Write + Send), answer: &str) -> AppResult<()> {
     writer
         .write_all(answer.as_bytes())
         .and_then(|_| writer.write_all(b"\n"))
         .and_then(|_| writer.flush())
-        .map_err(|err| AppError::AurHelperError(format!("Réponse PTY Yay : {err}")))?;
-    Ok(())
+        .map_err(|err| AppError::AurHelperError(format!("Réponse PTY Yay : {err}")))
 }
 
 async fn send_log(ui_tx: &async_channel::Sender<UiEvent>, line: &str) {
@@ -510,6 +528,31 @@ fn is_menu_header(line: &str) -> bool {
 
 fn is_number_prompt(line: &str) -> bool {
     line.to_ascii_lowercase().contains("enter a number")
+}
+
+/// Menus de Yay déjà neutralisés par les options `--answer* None`.
+fn is_ignored_yay_menu_line(line: &str) -> bool {
+    let lower = line.to_ascii_lowercase();
+    lower.contains("diffs to show")
+        || lower.contains("packages to cleanbuild")
+        || lower.contains("pkgbuilds to edit")
+}
+
+/// Confirmations internes de Yay qui ne doivent pas ouvrir de fenêtre : la
+/// décision a déjà été prise dans l'application.
+fn auto_answer_for_yay_prompt(line: &str) -> Option<&'static str> {
+    let lower = line.to_ascii_lowercase();
+    if lower.contains("proceed with install")
+        || lower.contains("proceed with download")
+        || lower.contains("try to build them anyway")
+        || lower.contains("import?")
+    {
+        Some("y")
+    } else if lower.contains("remove make dependencies after install") {
+        Some("n")
+    } else {
+        None
+    }
 }
 
 fn parse_repository_line(line: &str) -> Option<String> {
@@ -748,6 +791,57 @@ mod tests {
 
         assert!(answered, "le menu fournisseur réel n'a pas été détecté");
         assert_eq!(writer, b"2\n");
+    }
+
+    #[test]
+    fn ignores_yay_diff_menu_and_auto_confirms_install() {
+        assert!(is_ignored_yay_menu_line("==> Diffs to show?"));
+        assert!(is_ignored_yay_menu_line("==> Packages to cleanBuild?"));
+        assert!(is_ignored_yay_menu_line("==> PKGBUILDs to edit?"));
+        assert_eq!(
+            auto_answer_for_yay_prompt(":: Proceed with install? [Y/n]"),
+            Some("y")
+        );
+        assert_eq!(auto_answer_for_yay_prompt(":: Import? [Y/n]"), Some("y"));
+        assert_eq!(
+            auto_answer_for_yay_prompt(":: Remove make dependencies after install? [y/N]"),
+            Some("n")
+        );
+        assert!(matches!(
+            detect_prompt("Build with GTK4? [Y/n]"),
+            Some(YayPromptKind::Confirm { default: true, .. })
+        ));
+    }
+
+    #[tokio::test]
+    async fn yay_menu_lines_do_not_open_prompt() {
+        let (ui_tx, ui_rx) = async_channel::unbounded();
+        let cancel = std::sync::Arc::new(InstallCancelHandle::new());
+
+        let mut command = Command::new("sh");
+        command.arg("-c").arg(
+            "printf '==> Diffs to show?\n==> [N]one [A]ll\n==> None\n:: Proceed with install? [Y/n] '; read answer; echo \"CHOSEN:$answer\"",
+        );
+        let spec = PtyCommandSpec::from_command(&command);
+        let task = {
+            let cancel = std::sync::Arc::clone(&cancel);
+            tokio::spawn(async move {
+                run_interactive_yay(spec, String::from("ok"), &[], &cancel, &ui_tx).await
+            })
+        };
+
+        let result = tokio::time::timeout(Duration::from_secs(5), task)
+            .await
+            .expect("le runner PTY ne s'est pas terminé")
+            .expect("tâche PTY");
+        assert!(result.is_ok(), "échec PTY : {result:?}");
+        // Aucun prompt utilisateur ne doit avoir été émis.
+        while let Ok(event) = ui_rx.try_recv() {
+            assert!(
+                !matches!(event, UiEvent::YayPromptRequired { .. }),
+                "un menu Yay a ouvert une fenêtre"
+            );
+        }
     }
 
     #[tokio::test]
