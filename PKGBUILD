@@ -1,8 +1,8 @@
 # Maintainer: Chomiam <axel.valens@ik.me>
 pkgname=noos-package-manager
-pkgver=0.1.17
+pkgver=0.1.18
 pkgrel=1
-pkgdesc="Gestionnaire de paquets GTK4/libAdapta et outil CLI (noos-up) pour Arch Linux (Pacman, AUR via Yay, Flatpak et AppImages)"
+pkgdesc="Gestionnaire de paquets GTK4/libAdapta (libAdapta inclus) et outil CLI (noos-up) pour Arch Linux (Pacman, AUR via Yay, Flatpak et AppImages)"
 arch=('x86_64' 'aarch64')
 url="https://github.com/Chomiam/noos-package-manager"
 license=('GPL-3.0-or-later' 'LGPL-2.1-or-later')
@@ -29,6 +29,8 @@ depends=(
   'reflector'
   'git'
 )
+provides=('libadapta=1.5.0' 'libadapta-1.so=0-64')
+conflicts=('libadapta')
 makedepends=(
   'cargo'
   'cargo-auditable'
@@ -38,6 +40,9 @@ makedepends=(
   'sassc'
   'gettext'
   'pkgconf'
+  'glib2-devel'
+  'gobject-introspection'
+  'vala'
 )
 source=(
   "$pkgname-$pkgver.tar.gz::https://github.com/Chomiam/noos-package-manager/archive/refs/tags/v$pkgver.tar.gz"
@@ -45,20 +50,11 @@ source=(
 )
 # Rempli après la création du tag (sommes BLAKE2b des deux tarballs sources).
 b2sums=(
-  'b91a5e90b5b8c303f30bbec2a8e6456cbc00216ccfc444143351e01aa03d6b11a4cb21cd39971f747d16eb9f52cdb6308ffc6f0c6d50697010780bda50891312'
+  'SKIP'
   '7b7305e300701f91baddbe7da80b006ce6e058cf6ce22bd352d03aff4ed902e6ea166682890cbc5f476ac237c72fb18051f69f523b67f560df81245db4e9f56e'
 )
 
 prepare() {
-  cd "$srcdir/libadapta-$_libadapta_ver"
-  # Renomme la bibliothèque pour qu'elle puisse coexister avec le paquet AUR
-  # libadapta sans conflit de fichiers ni de soname.
-  sed -i "s/'adapta-' + apiversion/'noos-adapta-' + apiversion/" src/meson.build
-  grep -q "'noos-adapta-' + apiversion" src/meson.build || {
-    echo "Le renommage de libadapta a échoué." >&2
-    return 1
-  }
-
   cd "$srcdir/$pkgname-$pkgver"
   export RUSTUP_TOOLCHAIN=stable
   cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
@@ -67,12 +63,15 @@ prepare() {
 build() {
   local _stage="$srcdir/libadapta-stage"
   local _build="$srcdir/libadapta-build"
+  local _pc="$srcdir/libadapta-pc"
 
-  rm -rf "$_build" "$_stage"
+  rm -rf "$_build" "$_stage" "$_pc"
 
   # libAdapta est construit sans tests : le check() du paquet AUR échoue sur
-  # CachyOS quand gtk-application-prefer-dark-theme est actif. L'application
-  # n'a besoin que de la bibliothèque.
+  # CachyOS quand gtk-application-prefer-dark-theme est actif. La bibliothèque
+  # est installée sous son nom d'origine (libadapta-1.so.0), avec ses en-têtes,
+  # son GIR, son VAPI et son pkg-config, pour remplacer complètement le paquet
+  # AUR libadapta.
   meson setup "$_build" "$srcdir/libadapta-$_libadapta_ver" \
     --prefix=/usr \
     --libdir=lib \
@@ -80,25 +79,23 @@ build() {
     --wrap-mode=nodownload \
     -Dtests=false \
     -Dexamples=false \
-    -Dintrospection=disabled \
-    -Dvapi=false \
     -Dgtk_doc=false \
-    -Dlocaledir=share/noos-package-manager/locale \
-    -Ddatadir=share/noos-package-manager
+    -Dintrospection=enabled \
+    -Dvapi=true
   meson compile -C "$_build"
   DESTDIR="$_stage" meson install -C "$_build"
 
-  # pkg-config doit pointer vers la bibliothèque de staging, jamais vers une
-  # éventuelle copie système de libadapta.
-  sed -i \
-    -e "s|^libdir=.*|libdir=$_stage/usr/lib|" \
+  # Copie du pkg-config pour la compilation de l'application : elle doit
+  # pointer vers la bibliothèque de staging, jamais vers une copie système.
+  install -d "$_pc"
+  sed -e "s|^libdir=.*|libdir=$_stage/usr/lib|" \
     -e "s|^includedir=.*|includedir=$_stage/usr/include|" \
-    "$_stage/usr/lib/pkgconfig/libadapta-1.pc"
+    "$_stage/usr/lib/pkgconfig/libadapta-1.pc" > "$_pc/libadapta-1.pc"
 
   cd "$srcdir/$pkgname-$pkgver"
   export RUSTUP_TOOLCHAIN=stable
   export CARGO_TARGET_DIR=target
-  export PKG_CONFIG_PATH="$_stage/usr/lib/pkgconfig"
+  export PKG_CONFIG_PATH="$_pc"
   export LD_LIBRARY_PATH="$_stage/usr/lib"
   # Durcissement explicite : RELRO complet, NX, liaison « as-needed ».
   # Les CFLAGS de makepkg apportent déjà PIE, stack protector et FORTIFY_SOURCE
@@ -114,7 +111,7 @@ build() {
 check() {
   cd "$srcdir/$pkgname-$pkgver"
   export RUSTUP_TOOLCHAIN=stable
-  export PKG_CONFIG_PATH="$srcdir/libadapta-stage/usr/lib/pkgconfig"
+  export PKG_CONFIG_PATH="$srcdir/libadapta-pc"
   export LD_LIBRARY_PATH="$srcdir/libadapta-stage/usr/lib"
   cargo test --frozen --all-features
 }
@@ -130,16 +127,8 @@ package() {
     "$pkgdir/usr/share/licenses/$pkgname/LICENSE-libadapta"
   install -Dm644 "README.md" "$pkgdir/usr/share/doc/$pkgname/README.md"
 
-  # Bibliothèque libAdapta privée, renommée pour ne pas entrer en conflit avec
-  # le paquet AUR libadapta. Le binaire est lié à ce soname.
-  install -Dm755 "$srcdir/libadapta-stage/usr/lib/libnoos-adapta-1.so.0" \
-    "$pkgdir/usr/lib/libnoos-adapta-1.so.0"
-
-  # Traductions de libAdapta, dans le LOCALEDIR privé compilé dans la
-  # bibliothèque.
-  if [[ -d "$srcdir/libadapta-stage/usr/share/noos-package-manager/locale" ]]; then
-    install -d "$pkgdir/usr/share/noos-package-manager"
-    cp -a "$srcdir/libadapta-stage/usr/share/noos-package-manager/locale" \
-      "$pkgdir/usr/share/noos-package-manager/"
-  fi
+  # libAdapta complet (bibliothèque, en-têtes, GIR, VAPI, pkg-config,
+  # traductions et thème d'exemple), sous son nom d'origine. Le paquet déclare
+  # provides/conflicts=libadapta pour remplacer le paquet AUR du même nom.
+  cp -a "$srcdir/libadapta-stage/usr/." "$pkgdir/usr/"
 }

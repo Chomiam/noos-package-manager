@@ -55,6 +55,16 @@ jobs:
       - name: Audit des dépendances Rust
         run: cargo audit --deny warnings
 
+      - name: Retirer libadapta système avant l'empaquetage
+        run: |
+          # Les tests Rust ont utilisé le paquet AUR libadapta. Le paquet
+          # noos-package-manager embarque sa propre copie sous le même soname ;
+          # on retire la copie système pour que namcap ne la considère pas comme
+          # une dépendance externe.
+          if pacman -Q libadapta >/dev/null 2>&1; then
+            pacman -Rdd --noconfirm libadapta
+          fi
+
       - name: Construire le paquet
         run: |
           set -euo pipefail

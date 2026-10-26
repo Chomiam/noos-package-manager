@@ -94,30 +94,37 @@ de version.
 
 ### libAdapta embarqué
 
-Depuis **0.1.17**, `PKGBUILD` construit libAdapta 1.5.0 depuis le tarball
-officiel et l'installe sous le nom `libnoos-adapta-1.so.0` :
+Depuis **0.1.18**, `PKGBUILD` construit libAdapta 1.5.0 depuis le tarball
+officiel et l'installe sous son nom d'origine `libadapta-1.so.0` :
 
-- `prepare()` renomme la cible Meson (`adapta-` → `noos-adapta-`) et vérifie que
-  le renommage a bien été appliqué ;
 - `build()` configure libAdapta avec `-Dtests=false -Dexamples=false
-  -Dintrospection=disabled -Dvapi=false -Dgtk_doc=false`, l'installe dans
-  `$srcdir/libadapta-stage`, puis construit l'application avec `PKG_CONFIG_PATH`
-  et `LD_LIBRARY_PATH` pointant vers ce staging ;
-- `package()` installe la bibliothèque, ses traductions privées
-  (`/usr/share/noos-package-manager/locale`) et sa licence LGPL-2.1-or-later.
+  -Dgtk_doc=false -Dintrospection=enabled -Dvapi=true`, l'installe dans
+  `$srcdir/libadapta-stage`, puis construit l'application avec un pkg-config de
+  staging (`$srcdir/libadapta-pc`) et `LD_LIBRARY_PATH` ;
+- `package()` copie tout l'arbre libAdapta (bibliothèque, en-têtes, GIR, VAPI,
+  pkg-config, traductions, thème d'exemple) et sa licence LGPL-2.1-or-later.
 
-Cette approche évite le `check()` du paquet AUR `libadapta`, qui échoue sur
-CachyOS quand `gtk-application-prefer-dark-theme` est actif. Elle évite aussi
-tout conflit avec `libadapta` : la bibliothèque a un soname privé, donc les deux
-peuvent coexister. **Ne pas réintroduire `depends=('libadapta')`** : cela
-ramènerait l'échec CachyOS.
+Le paquet déclare `provides=('libadapta=1.5.0' 'libadapta-1.so=0-64')` et
+`conflicts=('libadapta')` : il remplace le paquet AUR `libadapta`, construit
+depuis la même source mais dont le `check()` échoue sur CachyOS quand
+`gtk-application-prefer-dark-theme` est actif. Les autres paquets dépendant de
+`libadapta` restent satisfaits par le `provides`. **Ne pas retirer le
+`provides`/`conflicts`** : cela recréerait un conflit de fichiers avec le paquet
+AUR.
+
+Le build de release doit installer `glib2-devel` (pour `glib-mkenums`),
+`gobject-introspection` et `vala` ; sans `glib2-devel`, `meson setup` échoue
+avec `Dependency 'glib-2.0' tool variable 'glib_mkenums' contains erroneous
+value`.
 
 Le script `.github/scripts/install-libadapta.sh` reste utilisé par `ci.yml`
 uniquement pour `cargo test` et `cargo clippy`. `release.yml` n'en dépend plus.
 
-`namcap` signale `libnoos-adapta-1.so.0` comme « uninstalled dependency » :
-c'est un faux positif, la bibliothèque est bien incluse dans le paquet. Seules
-les erreurs `E:` sont bloquantes dans la CI.
+`namcap` signale `libadapta-1.so.0` comme « library-no-package-associated »
+dans la CI : la bibliothèque est incluse dans le paquet, mais namcap ne consulte
+que la base Pacman. Le paquet déclare `provides=('libadapta-1.so=0-64')` et la CI
+retire le paquet AUR `libadapta` avant l'empaquetage. Seules les erreurs `E:`
+sont bloquantes.
 
 ## Protection de `main` et environnements
 
@@ -302,7 +309,8 @@ par un SHA, sinon la provenance SLSA échoue.
 | Scorecard : `docker pull failed ... billing` | image GCR v2.4.0 | utiliser Scorecard v2.5.0 (GHCR) |
 | SLSA : `Invalid ref ... Expected refs/tags/vX.Y.Z` | générateur épinglé par SHA | référencer `@v2.1.0` |
 | `ring` : symboles x25519 manquants | LTO de makepkg | `options=(!lto)` |
-| CachyOS : `libadapta` échoue dans `check()` (`Adapta-FATAL-WARNING: gtk-application-prefer-dark-theme`), versions ≤ 0.1.16 | thème sombre GTK + tests libadapta 1.5.0 fatals | mettre à jour vers 0.1.17+ (libAdapta embarqué) ; sinon `yay -S --mflags "--nocheck" libadapta` puis `yay -S noos-package-manager` |
+| CachyOS : `libadapta` échoue dans `check()` (`Adapta-FATAL-WARNING: gtk-application-prefer-dark-theme`), versions ≤ 0.1.16 | thème sombre GTK + tests libadapta 1.5.0 fatals | mettre à jour vers 0.1.18+ (libAdapta fourni sous son nom d'origine) ; sinon `yay -S --mflags "--nocheck" libadapta` puis `yay -S noos-package-manager` |
+| libadapta : `meson setup` échoue sur `glib_mkenums` | `glib2-devel` absent | installer `glib2-devel` (makedepend) |
 | AUR : refus de push | secret absent ou tag hors `v*` | vérifier `AUR_SSH_PRIVATE_KEY` et la politique de l'environnement `aur` |
 | AUR : `b2sums` invalides | tarball du tag modifié | recalculer la somme et republier |
 | App affiche une ancienne version | ancien binaire dans `~/.local/bin`/`~/.cargo/bin` | lancer `/usr/bin/noos-package-manager` ou corriger le `Exec` du `.desktop` |
