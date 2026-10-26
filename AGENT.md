@@ -269,6 +269,7 @@ par un SHA, sinon la provenance SLSA échoue.
 | Scorecard : `docker pull failed ... billing` | image GCR v2.4.0 | utiliser Scorecard v2.5.0 (GHCR) |
 | SLSA : `Invalid ref ... Expected refs/tags/vX.Y.Z` | générateur épinglé par SHA | référencer `@v2.1.0` |
 | `ring` : symboles x25519 manquants | LTO de makepkg | `options=(!lto)` |
+| CachyOS : `libadapta` échoue dans `check()` (`Adapta-FATAL-WARNING: gtk-application-prefer-dark-theme`) | thème sombre GTK + tests libadapta 1.5.0 fatals | `yay -S --mflags "--nocheck" libadapta` puis `yay -S noos-package-manager` |
 | AUR : refus de push | secret absent ou tag hors `v*` | vérifier `AUR_SSH_PRIVATE_KEY` et la politique de l'environnement `aur` |
 | AUR : `b2sums` invalides | tarball du tag modifié | recalculer la somme et republier |
 | App affiche une ancienne version | ancien binaire dans `~/.local/bin`/`~/.cargo/bin` | lancer `/usr/bin/noos-package-manager` ou corriger le `Exec` du `.desktop` |
