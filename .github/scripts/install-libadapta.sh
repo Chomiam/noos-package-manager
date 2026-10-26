@@ -2,6 +2,9 @@
 #
 # Installe libAdapta dans l'environnement Arch Linux de la CI.
 #
+# Ce script ne sert qu'à `cargo test` et `cargo clippy` : le paquet AUR
+# construit sa propre copie embarquée de libAdapta dans le PKGBUILD.
+#
 # Le paquet n'est pas dans les dépôts officiels : on construit la version
 # épinglée de l'AUR une seule fois, puis on met le paquet en cache entre les
 # exécutions GitHub Actions.

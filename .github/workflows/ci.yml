@@ -29,8 +29,10 @@ jobs:
             base-devel git curl libarchive \
             cargo rust namcap checksec cargo-audit cargo-auditable syft \
             meson ninja vala gobject-introspection gi-docgen glib2-devel sassc \
-            gtk4 appstream fribidi graphene pango
+            gettext pkgconf gtk4 appstream fribidi graphene pango
 
+      # libadapta système : nécessaire pour `cargo test` et `cargo clippy`.
+      # Le paquet construit sa propre copie embarquée dans le PKGBUILD.
       - name: Cache libAdapta
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         continue-on-error: true

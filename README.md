@@ -97,7 +97,8 @@ yay -S noos-package-manager
 ```
 
 Noos Package Manager est distribué comme paquet source : `yay` récupère les
-sources, construit l'application et installe `libadapta` si nécessaire.
+sources, construit l'application et **libAdapta embarqué**. Aucune dépendance
+AUR `libadapta` séparée n'est nécessaire.
 
 ### Depuis les sources
 
@@ -123,9 +124,28 @@ noos-up          # vérifie et applique toutes les mises à jour
 noos-up --check  # vérifie seulement
 ```
 
+La construction directe avec Cargo utilise la bibliothèque système
+`libadapta`. Le paquet AUR, lui, embarque sa propre copie. Sur CachyOS, si
+l'installation de `libadapta` échoue dans ses tests, voir
+[Dépannage](#dépannage).
+
+### libAdapta embarqué
+
+Le paquet AUR construit **libAdapta 1.5.0** depuis sa source officielle et
+l'installe sous le nom `libnoos-adapta-1.so.0`. Ce renommage évite tout conflit
+avec le paquet AUR `libadapta` et garantit que l'application fonctionne même si
+la bibliothèque système n'est pas installée.
+
+libAdapta reste distribué sous **LGPL-2.1-or-later** ; sa licence est installée
+dans `/usr/share/licenses/noos-package-manager/LICENSE-libadapta`.
+
 ## Dépannage
 
-### CachyOS : `libadapta` échoue à l'installation
+### CachyOS : `libadapta` échoue à l'installation (0.1.16 et antérieurs)
+
+> Les versions **0.1.17 et ultérieures** embarquent libAdapta et ne sont pas
+> concernées. La procédure ci-dessous ne vaut que pour les versions
+> antérieures.
 
 CachyOS active `gtk-application-prefer-dark-theme` dans la configuration GTK.
 Les tests de `libadapta` 1.5.0 traitent l'avertissement associé comme fatal et
@@ -182,6 +202,9 @@ Les préférences sont conservées dans
 - **Provenance SLSA Build L3** vérifiable avec `slsa-verifier`.
 - **SBOM SPDX 2.3** attaché à chaque release.
 - Sommes **BLAKE2b** dans le PKGBUILD de l'AUR et **SHA-256** pour les artefacts.
+- **libAdapta 1.5.0 embarqué** (LGPL-2.1-or-later), renommé
+  `libnoos-adapta-1.so.0` pour éviter les conflits avec le paquet AUR
+  `libadapta`.
 - Vérifications **namcap**, **checksec**, `cargo audit`, `cargo auditable`, **CodeQL** et **fuzzing** `cargo-fuzz`.
 - Actions GitHub épinglées (SHA, sauf le générateur SLSA référencé par tag), Dependabot et **OpenSSF Scorecard**.
 

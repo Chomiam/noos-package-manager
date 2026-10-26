@@ -30,8 +30,9 @@ Chaque release GitHub contient, en plus du paquet Arch :
 | `b2sums.txt` | empreintes BLAKE2b du paquet et du SBOM |
 
 Les sommes du **code source** sont dans le `PKGBUILD` de l'AUR, au format
-`b2sums` (BLAKE2b-512). `makepkg` les vérifie automatiquement pendant
-l'installation depuis l'AUR.
+`b2sums` (BLAKE2b-512). Elles couvrent le tarball de l'application et celui de
+libAdapta embarqué. `makepkg` les vérifie automatiquement pendant l'installation
+depuis l'AUR.
 
 ### Vérification de la provenance
 
@@ -48,8 +49,8 @@ go install github.com/slsa-framework/slsa-verifier/v2/cli/slsa-verifier@latest
 Puis, dans le dossier contenant les fichiers téléchargés :
 
 ```bash
-TAG=v0.1.16
-VERSION=0.1.16
+TAG=v0.1.17
+VERSION=0.1.17
 
 slsa-verifier verify-artifact \
   "noos-package-manager-${VERSION}-1-x86_64.pkg.tar.zst" \
@@ -101,6 +102,16 @@ Il peut être analysé avec `grype` ou `trivy` :
 ```bash
 grype sbom:sbom.spdx.json
 ```
+
+### libAdapta embarqué
+
+Depuis 0.1.17, le paquet construit libAdapta 1.5.0 depuis sa source officielle
+et l'installe sous le nom `libnoos-adapta-1.so.0`. La somme BLAKE2b du tarball
+libadapta est vérifiée par `makepkg` comme celle du code source de
+l'application. La bibliothèque est distribuée sous **LGPL-2.1-or-later** ; sa
+licence est installée dans
+`/usr/share/licenses/noos-package-manager/LICENSE-libadapta`. Le renommage du
+soname évite tout conflit avec le paquet AUR `libadapta`.
 
 ## Contrôles automatiques
 

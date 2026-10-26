@@ -31,18 +31,7 @@ jobs:
           pacman -Syu --noconfirm --needed \
             base-devel git curl libarchive \
             cargo rust namcap checksec cargo-audit cargo-auditable syft \
-            meson ninja vala gobject-introspection gi-docgen glib2-devel sassc \
-            gtk4 appstream fribidi graphene pango
-
-      - name: Cache libAdapta
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        continue-on-error: true
-        with:
-          path: /var/cache/libadapta-ci
-          key: libadapta-${{ runner.arch }}-3cbf69d2-a797378f0282933d85e125ceaccc150bc3a00ed0
-
-      - name: Installer libAdapta
-        run: ./.github/scripts/install-libadapta.sh
+            meson ninja sassc gettext pkgconf gtk4 appstream fribidi graphene pango
 
       - name: Vérifier la version et les sommes
         env:
@@ -55,8 +44,8 @@ jobs:
             echo "pkgver=$PKGVER ne correspond pas au tag $TAG" >&2
             exit 1
           }
-          if grep -q "b2sums=('SKIP')" PKGBUILD; then
-            echo "b2sums n'a pas été renseigné pour $TAG" >&2
+          if grep -q "'SKIP'" PKGBUILD; then
+            echo "b2sums contient encore SKIP pour $TAG" >&2
             exit 1
           fi
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
@@ -218,6 +207,19 @@ jobs:
           }
           grep -q "b2sums = $B2" .SRCINFO || {
             echo "Le .SRCINFO n'est pas synchronisé avec le PKGBUILD." >&2
+            exit 1
+          }
+          LIBADAPTA_VER="$(grep -m1 '^_libadapta_ver=' PKGBUILD | cut -d= -f2)"
+          curl -fsSL \
+            "https://github.com/xapp-project/libadapta/archive/${LIBADAPTA_VER}.tar.gz" \
+            -o libadapta-source.tar.gz
+          B2_LIB="$(b2sum libadapta-source.tar.gz | awk '{print $1}')"
+          grep -q "$B2_LIB" PKGBUILD || {
+            echo "La somme BLAKE2 de libadapta ne correspond pas au PKGBUILD." >&2
+            exit 1
+          }
+          grep -q "b2sums = $B2_LIB" .SRCINFO || {
+            echo "Le .SRCINFO ne contient pas la somme de libadapta." >&2
             exit 1
           }
 

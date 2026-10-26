@@ -17,7 +17,8 @@ les règles à respecter pour préparer, tester et publier une version de
 3. **Ne jamais déplacer, supprimer ou réécrire un tag publié.** Une release
    publiée doit rester reproductible.
 4. **Ne jamais modifier les `b2sums` sans avoir créé le tag correspondant.**
-   La somme est calculée sur le tarball GitHub du tag.
+   La somme de l'application est calculée sur le tarball GitHub du tag ; celle
+   de `libadapta-1.5.0.tar.gz` est fixe et vérifiée à chaque build.
 5. **Ne jamais committer de secret.** La clé AUR est stockée dans
    l'environnement GitHub `aur`, pas dans le dépôt.
 6. **Ne pas modifier `~/.local/bin`, `~/.cargo/bin` ou les fichiers `.desktop`
@@ -39,7 +40,8 @@ Déclencheurs : push sur `main`/`testing` et pull requests.
 
 Le job `Build, tests et contrôles de sécurité` tourne dans un conteneur
 `archlinux:base-devel` **épinglé par digest**. Il installe les outils, construit
-`libadapta` depuis l'AUR à un commit épinglé, puis exécute :
+`libadapta` depuis l'AUR à un commit épinglé pour les commandes `cargo test` et
+`cargo clippy` (le paquet, lui, embarque sa propre copie), puis exécute :
 
 - `cargo fetch --locked` ;
 - `cargo test --frozen --all-features` ;
@@ -62,17 +64,18 @@ Jobs :
 
 1. **`build`** : checkout de `main` (PKGBUILD avec les `b2sums` à jour), vérifie
    que `pkgver` correspond au tag, construit le tarball source depuis le tag via
-   `makepkg`, puis exécute namcap, checksec, `cargo audit`/`cargo audit bin` et
-   génère le **SBOM SPDX 2.3** avec `syft`.
+   `makepkg` (qui construit aussi libAdapta embarqué), puis exécute namcap,
+   checksec, `cargo audit`/`cargo audit bin` et génère le **SBOM SPDX 2.3** avec
+   `syft`.
 2. **`provenance`** : appelle le workflow officiel
    `slsa-framework/slsa-github-generator/.../generator_generic_slsa3.yml`.
    **Le générateur doit être référencé par un tag (`v2.1.0`), jamais par un SHA** :
    son action interne utilise ce ref pour télécharger le builder signé.
 3. **`release-assets`** : attache le paquet, le SBOM, les empreintes SHA-256 et
    BLAKE2b à la release GitHub.
-4. **`publish-aur`** : vérifie le tag, la version et la somme BLAKE2b du tarball,
-   clone l'AUR, copie `PKGBUILD` et `.SRCINFO`, puis pousse le commit
-   `upgpkg: noos-package-manager X.Y.Z-1`.
+4. **`publish-aur`** : vérifie le tag, la version et les sommes BLAKE2b des
+   tarballs (application et libAdapta), clone l'AUR, copie `PKGBUILD` et
+   `.SRCINFO`, puis pousse le commit `upgpkg: noos-package-manager X.Y.Z-1`.
 
 L'environnement GitHub `aur` est restreint aux tags `v*` et contient le secret
 `AUR_SSH_PRIVATE_KEY`.
@@ -89,6 +92,33 @@ Met à jour chaque semaine les dépendances Cargo et les actions GitHub. Les
 actions sont épinglées par SHA ; Dependabot met à jour le SHA et le commentaire
 de version.
 
+### libAdapta embarqué
+
+Depuis **0.1.17**, `PKGBUILD` construit libAdapta 1.5.0 depuis le tarball
+officiel et l'installe sous le nom `libnoos-adapta-1.so.0` :
+
+- `prepare()` renomme la cible Meson (`adapta-` → `noos-adapta-`) et vérifie que
+  le renommage a bien été appliqué ;
+- `build()` configure libAdapta avec `-Dtests=false -Dexamples=false
+  -Dintrospection=disabled -Dvapi=false -Dgtk_doc=false`, l'installe dans
+  `$srcdir/libadapta-stage`, puis construit l'application avec `PKG_CONFIG_PATH`
+  et `LD_LIBRARY_PATH` pointant vers ce staging ;
+- `package()` installe la bibliothèque, ses traductions privées
+  (`/usr/share/noos-package-manager/locale`) et sa licence LGPL-2.1-or-later.
+
+Cette approche évite le `check()` du paquet AUR `libadapta`, qui échoue sur
+CachyOS quand `gtk-application-prefer-dark-theme` est actif. Elle évite aussi
+tout conflit avec `libadapta` : la bibliothèque a un soname privé, donc les deux
+peuvent coexister. **Ne pas réintroduire `depends=('libadapta')`** : cela
+ramènerait l'échec CachyOS.
+
+Le script `.github/scripts/install-libadapta.sh` reste utilisé par `ci.yml`
+uniquement pour `cargo test` et `cargo clippy`. `release.yml` n'en dépend plus.
+
+`namcap` signale `libnoos-adapta-1.so.0` comme « uninstalled dependency » :
+c'est un faux positif, la bibliothèque est bien incluse dans le paquet. Seules
+les erreurs `E:` sont bloquantes dans la CI.
+
 ## Protection de `main` et environnements
 
 - Pull request obligatoire, check CI requis, force-push et suppression
@@ -104,7 +134,8 @@ de version.
 1. Développer et tester sur `testing`.
 2. Mettre à jour la version :
    - `Cargo.toml` ;
-   - `PKGBUILD` (`pkgver`, `b2sums=('SKIP')`) ;
+   - `PKGBUILD` (`pkgver`, entrée `SKIP` pour le tarball de l'application dans
+     `b2sums` ; conserver la somme fixe de `libadapta-1.5.0.tar.gz`) ;
    - `.SRCINFO` via `makepkg --printsrcinfo` ;
    - `Cargo.lock` via `cargo check`.
 3. Lancer localement `cargo test`, `cargo clippy --all-targets -- -D warnings`,
@@ -123,9 +154,11 @@ de version.
      "https://github.com/Chomiam/noos-package-manager/archive/refs/tags/vX.Y.Z.tar.gz"
    b2sum source.tar.gz
    ```
-8. Remplacer `b2sums=('SKIP')` et la valeur dans `.SRCINFO`, puis ouvrir une
-   pull request vers `main` (la branche est protégée, même pour les admins).
-   Attendre le check CI et merger avant de créer la release.
+   Cette somme remplace l'entrée `SKIP` de `b2sums`. La seconde entrée,
+   `libadapta-1.5.0.tar.gz`, ne change pas.
+8. Remplacer l'entrée `SKIP` et la valeur correspondante dans `.SRCINFO`, puis
+   ouvrir une pull request vers `main` (la branche est protégée, même pour les
+   admins). Attendre le check CI et merger avant de créer la release.
 9. Créer la release GitHub publiée :
    ```bash
    gh release create vX.Y.Z --title "..." --notes-file ...
@@ -269,7 +302,7 @@ par un SHA, sinon la provenance SLSA échoue.
 | Scorecard : `docker pull failed ... billing` | image GCR v2.4.0 | utiliser Scorecard v2.5.0 (GHCR) |
 | SLSA : `Invalid ref ... Expected refs/tags/vX.Y.Z` | générateur épinglé par SHA | référencer `@v2.1.0` |
 | `ring` : symboles x25519 manquants | LTO de makepkg | `options=(!lto)` |
-| CachyOS : `libadapta` échoue dans `check()` (`Adapta-FATAL-WARNING: gtk-application-prefer-dark-theme`) | thème sombre GTK + tests libadapta 1.5.0 fatals | `yay -S --mflags "--nocheck" libadapta` puis `yay -S noos-package-manager` |
+| CachyOS : `libadapta` échoue dans `check()` (`Adapta-FATAL-WARNING: gtk-application-prefer-dark-theme`), versions ≤ 0.1.16 | thème sombre GTK + tests libadapta 1.5.0 fatals | mettre à jour vers 0.1.17+ (libAdapta embarqué) ; sinon `yay -S --mflags "--nocheck" libadapta` puis `yay -S noos-package-manager` |
 | AUR : refus de push | secret absent ou tag hors `v*` | vérifier `AUR_SSH_PRIVATE_KEY` et la politique de l'environnement `aur` |
 | AUR : `b2sums` invalides | tarball du tag modifié | recalculer la somme et republier |
 | App affiche une ancienne version | ancien binaire dans `~/.local/bin`/`~/.cargo/bin` | lancer `/usr/bin/noos-package-manager` ou corriger le `Exec` du `.desktop` |

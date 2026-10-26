@@ -55,7 +55,7 @@ reste à **0**.
 
 ### Qualité
 
-- 32 tests unitaires et d'intégration PTY.
+- 33 tests unitaires et d'intégration PTY.
 - CI sur chaque push et pull request.
 - Clippy sans avertissement (`-D warnings`).
 - CodeQL et fuzzing.
@@ -66,6 +66,8 @@ reste à **0**.
 - CodeQL pour Rust.
 - `cargo audit` et `cargo auditable`.
 - `namcap` et `checksec` pour le paquet Arch.
+- libAdapta 1.5.0 embarqué, construit depuis sa source officielle et distribué
+  sous LGPL-2.1-or-later (licence incluse).
 - SBOM SPDX attaché aux releases.
 
 ## Après création
