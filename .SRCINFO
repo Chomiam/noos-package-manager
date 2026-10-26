@@ -43,7 +43,7 @@ pkgbase = noos-package-manager
 	options = !debug
 	source = noos-package-manager-0.1.18.tar.gz::https://github.com/Chomiam/noos-package-manager/archive/refs/tags/v0.1.18.tar.gz
 	source = libadapta-1.5.0.tar.gz::https://github.com/xapp-project/libadapta/archive/1.5.0.tar.gz
-	b2sums = SKIP
+	b2sums = cccdeefdde7f67d81c8deea51fb861f36a77777b6b6e5a969e9e0a4e983e40043c4a32969e1b4e28481a24b18e5d342b7060be1d5d326faefbe9a89fac66f007
 	b2sums = 7b7305e300701f91baddbe7da80b006ce6e058cf6ce22bd352d03aff4ed902e6ea166682890cbc5f476ac237c72fb18051f69f523b67f560df81245db4e9f56e
 
 pkgname = noos-package-manager
