@@ -45,7 +45,7 @@ source=(
 )
 # Rempli après la création du tag (sommes BLAKE2b des deux tarballs sources).
 b2sums=(
-  'SKIP'
+  'b91a5e90b5b8c303f30bbec2a8e6456cbc00216ccfc444143351e01aa03d6b11a4cb21cd39971f747d16eb9f52cdb6308ffc6f0c6d50697010780bda50891312'
   '7b7305e300701f91baddbe7da80b006ce6e058cf6ce22bd352d03aff4ed902e6ea166682890cbc5f476ac237c72fb18051f69f523b67f560df81245db4e9f56e'
 )
 
