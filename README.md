@@ -123,6 +123,30 @@ noos-up          # vérifie et applique toutes les mises à jour
 noos-up --check  # vérifie seulement
 ```
 
+## Dépannage
+
+### CachyOS : `libadapta` échoue à l'installation
+
+CachyOS active `gtk-application-prefer-dark-theme` dans la configuration GTK.
+Les tests de `libadapta` 1.5.0 traitent l'avertissement associé comme fatal et
+`yay` s'arrête pendant `check()` :
+
+```text
+Bail out! Adapta-FATAL-WARNING: Using GtkSettings:gtk-application-prefer-dark-theme
+with libadapta is unsupported. Please use AdapStyleManager:color-scheme instead.
+```
+
+La bibliothèque est compilée correctement ; seul le contrôle échoue. Installez
+`libadapta` sans ses tests, puis l'application :
+
+```bash
+yay -S --mflags "--nocheck" libadapta
+yay -S noos-package-manager
+```
+
+`--nocheck` ne s'applique qu'à `libadapta`. `needrestart`, autre dépendance,
+s'installe normalement et n'est pas concerné.
+
 ## Premiers pas
 
 1. Lancez **Noos Package Manager** depuis le menu Démarrer ou avec
