@@ -31,7 +31,8 @@ jobs:
           pacman -Syu --noconfirm --needed \
             base-devel git curl libarchive \
             cargo rust namcap checksec cargo-audit cargo-auditable syft \
-            meson ninja sassc gettext pkgconf gtk4 appstream fribidi graphene pango
+            meson ninja sassc gettext pkgconf vala gobject-introspection glib2-devel \
+            gtk4 appstream fribidi graphene pango
 
       - name: Vérifier la version et les sommes
         env:

@@ -125,16 +125,17 @@ noos-up --check  # vérifie seulement
 ```
 
 La construction directe avec Cargo utilise la bibliothèque système
-`libadapta`. Le paquet AUR, lui, embarque sa propre copie. Sur CachyOS, si
-l'installation de `libadapta` échoue dans ses tests, voir
+`libadapta`. Le paquet AUR, lui, fournit libAdapta sous son nom d'origine. Sur
+CachyOS, si l'installation de `libadapta` échoue dans ses tests, voir
 [Dépannage](#dépannage).
 
 ### libAdapta embarqué
 
 Le paquet AUR construit **libAdapta 1.5.0** depuis sa source officielle et
-l'installe sous le nom `libnoos-adapta-1.so.0`. Ce renommage évite tout conflit
-avec le paquet AUR `libadapta` et garantit que l'application fonctionne même si
-la bibliothèque système n'est pas installée.
+l'installe sous son nom d'origine `libadapta-1.so.0`. Il déclare
+`provides=('libadapta=1.5.0')` et `conflicts=('libadapta')` : le paquet AUR
+`libadapta` est remplacé par cette version identique, sans ses tests. Les autres
+paquets qui dépendent de `libadapta` restent satisfaits par le `provides`.
 
 libAdapta reste distribué sous **LGPL-2.1-or-later** ; sa licence est installée
 dans `/usr/share/licenses/noos-package-manager/LICENSE-libadapta`.
@@ -143,9 +144,9 @@ dans `/usr/share/licenses/noos-package-manager/LICENSE-libadapta`.
 
 ### CachyOS : `libadapta` échoue à l'installation (0.1.16 et antérieurs)
 
-> Les versions **0.1.17 et ultérieures** embarquent libAdapta et ne sont pas
-> concernées. La procédure ci-dessous ne vaut que pour les versions
-> antérieures.
+> Les versions **0.1.18 et ultérieures** fournissent libAdapta sous son nom
+> d'origine et ne sont pas concernées. La procédure ci-dessous ne vaut que pour
+> les versions antérieures.
 
 CachyOS active `gtk-application-prefer-dark-theme` dans la configuration GTK.
 Les tests de `libadapta` 1.5.0 traitent l'avertissement associé comme fatal et
@@ -202,9 +203,9 @@ Les préférences sont conservées dans
 - **Provenance SLSA Build L3** vérifiable avec `slsa-verifier`.
 - **SBOM SPDX 2.3** attaché à chaque release.
 - Sommes **BLAKE2b** dans le PKGBUILD de l'AUR et **SHA-256** pour les artefacts.
-- **libAdapta 1.5.0 embarqué** (LGPL-2.1-or-later), renommé
-  `libnoos-adapta-1.so.0` pour éviter les conflits avec le paquet AUR
-  `libadapta`.
+- **libAdapta 1.5.0 embarqué** (LGPL-2.1-or-later), installé sous son nom
+  d'origine `libadapta-1.so.0` ; le paquet fournit `libadapta=1.5.0` et
+  remplace le paquet AUR du même nom.
 - Vérifications **namcap**, **checksec**, `cargo audit`, `cargo auditable`, **CodeQL** et **fuzzing** `cargo-fuzz`.
 - Actions GitHub épinglées (SHA, sauf le générateur SLSA référencé par tag), Dependabot et **OpenSSF Scorecard**.
 
